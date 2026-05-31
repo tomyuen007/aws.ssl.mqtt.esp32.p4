@@ -67,7 +67,9 @@ socat TCP-LISTEN:${MQTT_PORT},fork,reuseaddr \
       TCP:${LOCALSTACK_HOST}:${MQTT_PORT} &
 SOCAT_PIDS+=($!)
 
-# ── 3. Camera relay: QEMU user-net host (10.0.2.2) -> camera-proxy ───────────
+# ── 3. Camera relay: fallback for clients that connect to 10.0.2.2 directly ───
+# QEMU SLiRP DNS resolves "camera-proxy" via Docker embedded DNS (127.0.0.11),
+# same as localstack. This socat relay is the fallback during DNS failure.
 echo "==> Camera relay  0.0.0.0:${CAMERA_PROXY_PORT} -> ${CAMERA_PROXY_HOST}:${CAMERA_PROXY_PORT}"
 socat TCP-LISTEN:${CAMERA_PROXY_PORT},fork,reuseaddr \
       TCP:${CAMERA_PROXY_HOST}:${CAMERA_PROXY_PORT} &
@@ -131,7 +133,7 @@ secret = {
     "mqtt_port":             int(os.environ["MQTT_PORT"]),
     "mqtt_ssl_port":         8883,
     "thing_name":       os.environ["THING_NAME"],
-    "camera_proxy_url": "http://10.0.2.2:" + os.environ["CAMERA_PROXY_PORT"] + "/frame.jpg",
+    "camera_proxy_url": "http://camera-proxy:" + os.environ["CAMERA_PROXY_PORT"] + "/frame.jpg",
     # emulator=true tells main.py to use plain TCP (mqtt_port) not SSL (mqtt_ssl_port)
     "emulator":         True,
 }
