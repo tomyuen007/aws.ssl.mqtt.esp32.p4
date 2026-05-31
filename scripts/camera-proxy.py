@@ -5,7 +5,7 @@ HTTP camera proxy — serves frames as JPEG for the ESP32-P4 QEMU emulator.
 Capture modes (CAMERA_SOURCE env var):
   auto      Try V4L2 device, fall back to test pattern  (default)
   v4l2      Force V4L2 /dev/video0  (USB cam via usbipd-win)
-  network   Fetch from CAMERA_URL   (Windows built-in cam via windows-camera-server.py)
+  network   Fetch from CAMERA_URL   (Windows built-in cam via windows.camera.server/server.py)
   pattern   Always use animated test pattern
 
 Endpoints:
@@ -92,7 +92,7 @@ def _network_loop() -> None:
             if consecutive_errors == 1 or consecutive_errors % 30 == 0:
                 print(f"camera: network fetch error ({consecutive_errors}x): {e}",
                       flush=True)
-                print(f"  Is windows-camera-server.py running on Windows?",
+                print(f"  Is windows.camera.server/server.py running on Windows?",
                       flush=True)
             # Fall back to test pattern frame
             img = _test_pattern(_frame_num)

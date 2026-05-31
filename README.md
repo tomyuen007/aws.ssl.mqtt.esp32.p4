@@ -58,7 +58,7 @@ P3. echo 'export LOCALSTACK_AUTH_TOKEN=your-token' >> ~/.bashrc && source ~/.bas
 9.  docker run -d --name micropython-builder ... # Step 6
 10. docker exec micropython-builder bash -c "cp .../firmware.bin /firmware-out/"
 11. AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test THING_NAME=esp32p4-device-01 bash scripts/setup-localstack.sh
-12. python scripts\windows-camera-server.py --port 8081   # Windows CMD
+12. python windows.camera.server\server.py --port 8081   # Windows CMD
 13. docker run -d --name esp32p4-emulator ...  # Step 10 in README
 14. mpremote connect socket://localhost:2323
 15. mosquitto_sub -h localhost -p 1883 -t "devices/#" -v
@@ -267,12 +267,19 @@ Docker socket paths by platform — no `DOCKER_HOST` needed unless `docker info`
 |---|---|
 | Windows | `npipe:///./pipe/docker_engine` |
 | WSL2 | `unix:///var/run/docker.sock` |
-| macOS (older Docker Desktop) | `unix:///var/run/docker.sock` |
+| macOS (Docker Desktop < v4.13) | `unix:///var/run/docker.sock` |
 | macOS (Docker Desktop v4.13+) | `unix://$HOME/.docker/run/docker.sock` |
+| macOS (Docker Desktop v4.13+, alt) | `unix://$HOME/.docker/desktop/docker.sock` |
+
+macOS notes:
+- `/var/run/docker.sock` still exists on macOS but is a **symlink** pointing to `$HOME/.docker/run/docker.sock` — so the old path still works, it just resolves through the symlink.
+- `unix://` takes exactly three slashes before the absolute path (`unix:///` + `/path`). Four slashes would mean a double-slash path (`//path`) which is non-standard.
 
 Find the active socket on any platform:
 ```bash
-docker context inspect | grep Host
+docker context inspect | grep Host   # shows the socket the active context uses
+ls -la /var/run/docker.sock          # on macOS: shows what it symlinks to
+echo $DOCKER_HOST                    # shows if one is explicitly overridden
 ```
 
 **mpremote (WSL2)**
@@ -418,7 +425,7 @@ echo "LocalStack ready."
 ### Step 5 — Start camera-proxy
 
 Default camera source is `network` (Windows built-in camera via
-`windows-camera-server.py`).  See the [Camera modes](#camera-modes) section
+`windows.camera.server/server.py`).  See the [Camera modes](#camera-modes) section
 to switch to `v4l2` (USB) or `pattern` (test pattern).
 
 ```bash
@@ -497,13 +504,13 @@ Skip if using `CAMERA_SOURCE=pattern`.
 
 **From Windows CMD or PowerShell:**
 ```cmd
-python scripts\windows-camera-server.py --port 8081
+python windows.camera.server\server.py --port 8081
 ```
 
 **Or from WSL2** (opens a new Windows CMD window):
 ```bash
 cmd.exe /c start "Windows Camera Server" \
-  python.exe "$(wslpath -w "$(pwd)/scripts/windows-camera-server.py")" \
+  python.exe "$(wslpath -w "$(pwd)/windows.camera.server/server.py")" \
   --port 8081
 ```
 
@@ -614,7 +621,7 @@ devices/esp32p4-device-01/image      <binary JPEG>
 
 ```bash
 # 1. Windows camera server (Windows CMD / PowerShell)
-python scripts\windows-camera-server.py --port 8081
+python windows.camera.server\server.py --port 8081
 
 # 2. Start containers (WSL2) — skip if already running
 docker start localstack camera-proxy micropython-builder
@@ -1404,9 +1411,31 @@ Ship device           →    First boot: no unique cert
 
 ## Camera modes
 
+### How `windows.camera.server/server.py` fits into the project
+
+The ESP32-P4 firmware fetches JPEG frames over HTTP and publishes them over MQTT. In the QEMU emulator there is no camera hardware, so frames come from the `camera-proxy` Docker container. But `camera-proxy` runs inside Docker on WSL2 and cannot directly access the Windows built-in camera (Intel IPU / DirectShow). `windows.camera.server/server.py` bridges this gap — it runs on **Windows** and serves frames over HTTP that Docker can reach via `host.docker.internal`.
+
+```
+Windows built-in camera (DirectShow)
+        │  cv2.VideoCapture (DirectShow backend)
+        ▼
+windows.camera.server/server.py        Windows process, port 8081
+        │  GET http://host.docker.internal:8081/frame.jpg
+        ▼
+camera-proxy container          Docker/WSL2, port 8080
+        │  GET http://camera-proxy:8080/frame.jpg
+        ▼
+esp32p4-emulator (MicroPython)  QEMU, main.py fetches frame every 10 s
+        │  MQTT publish  devices/<thing>/image
+        ▼
+localstack                      MQTT broker
+```
+
+`windows.camera.server/server.py` is only needed when `CAMERA_SOURCE=network` (the default). Switch to `CAMERA_SOURCE=v4l2` (USB webcam) or `CAMERA_SOURCE=pattern` (test pattern) and it is not required at all.
+
 | `CAMERA_SOURCE` | Camera | Setup required |
 |---|---|---|
-| `network` (default) | Windows built-in (Intel IPU / DirectShow) | Run `windows-camera-server.py` on Windows |
+| `network` (default) | Windows built-in (Intel IPU / DirectShow) | Run `windows.camera.server/server.py` on Windows |
 | `v4l2` | USB webcam via usbipd-win | See below; add `--device /dev/video0` to `docker run` |
 | `pattern` | Animated test pattern | Nothing |
 
@@ -1451,7 +1480,7 @@ docker run -d \
 | 1883 | localstack | MQTT plain |
 | 8883 | localstack | MQTT TLS |
 | 8080 | camera-proxy | `GET /frame.jpg`  `GET /stream` |
-| 8081 | windows-camera-server.py | Windows side — not in Docker |
+| 8081 | windows.camera.server/server.py | Windows side — not in Docker |
 | 2323 | esp32p4-emulator | Serial REPL (mpremote / telnet) |
 | 1234 | esp32p4-emulator | QEMU GDB stub |
 
@@ -1512,7 +1541,10 @@ scripts/
   inject-scripts.py             Uploads .py files via mpremote after QEMU boots
   setup-localstack.sh           Provisions IoT thing / policy / cert
   camera-proxy.py               HTTP server: v4l2 / network / pattern modes
-  windows-camera-server.py      Windows DirectShow camera HTTP server
+windows.camera.server/
+  server.py                     Windows DirectShow camera HTTP server (run on Windows)
+  list_cameras.py               List available camera indices before starting server.py
+  requirements.txt              opencv-python
 
 firmware-out/                   firmware.bin lands here after Step 7
 certs/                          device.pem.crt from LocalStack after Step 8
