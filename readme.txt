@@ -80,8 +80,9 @@ FIRST-TIME SETUP
 
     Emulator  : run-qemu.sh reads WiFi credentials from the host's secret.json
                 (mounted read-only at /secret.json) and merges them with
-                emulator-specific overrides (mqtt_broker=10.0.2.2, camera
-                proxy URL, emulator=true). Writes the merged secret.json into
+                emulator-specific overrides (mqtt_broker=localstack,
+                camera_proxy_url=http://camera-proxy:8080/frame.jpg,
+                emulator=true). Writes the merged secret.json into
                 the virtual flash filesystem.
 
     Hardware  : upload-scripts uploads secret.json directly to the device
@@ -256,7 +257,7 @@ FIRST-TIME SETUP
       -e FLASH_SIZE_MB=8 \
       -e FS_OFFSET=0x200000 \
       -e FS_SIZE_MB=2 \
-      -e MQTT_BROKER=10.0.2.2 \
+      -e MQTT_BROKER=localstack \
       -e MQTT_PORT=1883 \
       -e THING_NAME=esp32p4-device-01 \
       -e LOCALSTACK_HOST=localstack \
@@ -267,17 +268,23 @@ FIRST-TIME SETUP
       esp32p4-emulator:latest
 
   What run-qemu.sh does inside the container:
-    1. Starts socat: 0.0.0.0:1883 -> localstack:1883   (MQTT relay)
-    2. Starts socat: 0.0.0.0:8080 -> camera-proxy:8080 (camera relay)
-    3. Pads firmware.bin to 8 MiB  (0xFF = erased NOR flash)
-    4. Reads WiFi credentials from /secret.json (mounted from host); merges with
-       emulator overrides (mqtt_broker=10.0.2.2, camera_proxy_url, emulator=true)
-       and writes merged secret.json into the littlefs
-    5. Copies boot.py / main.py from /scripts into the littlefs
+    1. Starts socat relays as DNS fallbacks (MQTT + camera -- see note below)
+    2. Pads firmware.bin to 8 MiB  (0xFF = erased NOR flash)
+    3. Reads WiFi credentials from /secret.json; merges with emulator overrides
+       (mqtt_broker=localstack,
+        camera_proxy_url=http://camera-proxy:8080/frame.jpg,
+        emulator=true) and writes merged secret.json into the littlefs
+    4. Copies boot.py / main.py from /scripts into the littlefs
        (secret.py is skipped -- frozen in the firmware image)
-    6. Injects littlefs at flash offset 0x200000
-    7. Launches: qemu-system-riscv32 -machine esp32p4
+    5. Injects littlefs at flash offset 0x200000
+    6. Launches: qemu-system-riscv32 -machine esp32p4
        Serial console on TCP 2323, GDB stub on TCP 1234
+
+  Name resolution note:
+    QEMU user-mode networking (SLiRP) proxies DNS through the container's
+    /etc/resolv.conf -> Docker embedded DNS (127.0.0.11) -> resolves
+    'localstack' and 'camera-proxy' to their iot-net IPs directly.
+    The socat relays handle the rare case where DNS is not yet ready at boot.
 
   Verify:
     docker logs esp32p4-emulator
@@ -389,7 +396,7 @@ REBUILD FIRMWARE
       -e FLASH_SIZE_MB=8 \
       -e FS_OFFSET=0x200000 \
       -e FS_SIZE_MB=2 \
-      -e MQTT_BROKER=10.0.2.2 \
+      -e MQTT_BROKER=localstack \
       -e MQTT_PORT=1883 \
       -e THING_NAME=esp32p4-device-01 \
       -e LOCALSTACK_HOST=localstack \
