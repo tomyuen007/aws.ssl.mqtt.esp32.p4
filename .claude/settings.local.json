@@ -18,7 +18,15 @@
       "Bash(git config *)",
       "Bash(gh repo *)",
       "Bash(git remote *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(sed -n '85,105p' /mnt/c/git/work/claude.code/iot/mqtt/README.md)",
+      "Bash(sed -n '280,325p' /mnt/c/git/work/claude.code/iot/mqtt/README.md)",
+      "Bash(sed -n '425,455p' /mnt/c/git/work/claude.code/iot/mqtt/README.md)",
+      "Bash(sed -n '78,95p' /mnt/c/git/work/claude.code/iot/mqtt/readme.txt)",
+      "Bash(sed -n '245,290p' /mnt/c/git/work/claude.code/iot/mqtt/readme.txt)",
+      "Bash(sed -n '382,405p' /mnt/c/git/work/claude.code/iot/mqtt/readme.txt)"
     ]
   }
 }

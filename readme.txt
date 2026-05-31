@@ -65,12 +65,26 @@ FIRST-TIME SETUP
 
   Edit secret.json and set your real values:
     {
-      "wifi_ssid":     "your-wifi-ssid",
-      "wifi_password": "your-wifi-password",
-      "mqtt_broker":   "192.168.1.100",
-      "mqtt_port":     1883,
-      "thing_name":    "esp32p4-device-01"
+      "wifi_ssid":             "your-wifi-ssid",
+      "wifi_password":         "your-wifi-password",
+      "mqtt_broker":           "192.168.1.100",
+      "mqtt_broker_emulator":  "localstack",
+      "mqtt_port":             1883,
+      "mqtt_ssl_port":         8883,
+      "thing_name":            "esp32p4-device-01",
+      "mqtt_ssl_verify":       false,
+      "ca_cert":               null,
+      "device_cert":           "device.pem.crt",
+      "device_key":            "device.key"
     }
+
+  mqtt_ssl_verify and cert paths:
+
+    Scenario          mqtt_ssl_verify  ca_cert   Notes
+    ----------------  ---------------  --------  ----------------------------------
+    Emulator          n/a              n/a        always plain TCP, emulator=true
+    LocalStack (hw)   false            null       self-signed cert, skip verify
+    Real AWS          true             "ca.pem"   use AmazonRootCA1.pem from AWS
 
   secret.json is listed in .gitignore -- it will never be committed.
 
@@ -495,6 +509,23 @@ PORT REFERENCE
   8081   windows-camera-server.py  (Windows side -- not in Docker)
   2323   esp32p4-emulator     Serial REPL  (mpremote / telnet)
   1234   esp32p4-emulator     QEMU GDB stub
+
+
+================================================================================
+MQTT TRANSPORT
+================================================================================
+
+  Runtime                          Port  Transport
+  -------------------------------  ----  -----------------------------------------
+  Emulator (emulator=true)         1883  Plain TCP -- SSL skipped entirely
+  Real hardware -> LocalStack      8883  TLS, server cert not verified
+                                         (mqtt_ssl_verify=false, self-signed)
+  Real hardware -> AWS IoT Core    8883  Mutual TLS, server verified
+                                         (mqtt_ssl_verify=true, AmazonRootCA1.pem)
+
+  Run "make setup" after containers start to provision the IoT thing and save
+  certs/device.pem.crt, certs/device.key, and certs/ca.pem (LocalStack CA).
+  "make upload-scripts" pushes all cert files to the device alongside secret.json.
 
 
 ================================================================================
