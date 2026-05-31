@@ -597,26 +597,55 @@ FIRST-TIME SETUP
 DAILY WORKFLOW  (after first-time setup)
 ================================================================================
 
-  # 1. Windows camera server  (Windows CMD / PowerShell)
-  python windows.camera.server\server.py --port 8081
+  Step 1 -- Start the Windows camera server
+  ------------------------------------------
+  Skip if using CAMERA_SOURCE=pattern.
 
-  # 2. Start containers  (WSL2) -- skip if already running
-  docker start localstack camera-proxy micropython-builder
+  From Windows CMD or PowerShell:
+    python windows.camera.server\server.py --port 8081
 
-  # 3. Wait for LocalStack IoT
-  until docker exec localstack \
-      curl -sf http://localhost:4566/_localstack/health | grep -q '"iot"'; do
-    sleep 2
-  done
+  From WSL2 (no need to switch terminal):
+    cmd.exe /c start "Windows Camera Server" \
+      python.exe "$(wslpath -w "$(pwd)/windows.camera.server/server.py")" \
+      --port 8081
 
-  # 4. Start emulator
-  docker start esp32p4-emulator
+  Verify:
+    curl -s http://host.docker.internal:8081/health
+    # {"ok":true,"source":"directshow","frames":N,"errors":0}
 
-  # 5. Attach REPL
-  mpremote connect socket://localhost:2323
 
-  # 6. Stop everything
-  docker stop esp32p4-emulator micropython-builder camera-proxy localstack
+  Step 2 -- Start containers  (WSL2, skip if already running)
+  ------------------------------------------------------------
+    docker start localstack camera-proxy micropython-builder
+
+
+  Step 3 -- Wait for LocalStack IoT to be ready
+  -----------------------------------------------
+    until docker exec localstack \
+        curl -sf http://localhost:4566/_localstack/health | grep -q '"iot"'; do
+      sleep 2
+    done
+    echo "LocalStack ready."
+
+
+  Step 4 -- Start the emulator
+  ------------------------------
+    docker start esp32p4-emulator
+
+
+  Step 5 -- Attach REPL
+  ----------------------
+    mpremote connect socket://localhost:2323
+
+  Press Ctrl-X to exit mpremote.
+
+
+  Step 6 -- Stop everything
+  --------------------------
+    docker stop esp32p4-emulator micropython-builder camera-proxy localstack
+
+  The Windows camera server must be stopped with Ctrl-C in its own window.
+  If launched via "cmd.exe /c start" from WSL2, close the CMD window.
 
 
 ================================================================================

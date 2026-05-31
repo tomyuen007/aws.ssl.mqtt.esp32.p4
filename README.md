@@ -631,28 +631,62 @@ devices/esp32p4-device-01/image      <binary JPEG>
 
 ## Daily workflow
 
-```bash
-# 1. Windows camera server (Windows CMD / PowerShell)
+### Step 1 — Start the Windows camera server
+
+Skip if using `CAMERA_SOURCE=pattern`.
+
+**Windows CMD or PowerShell:**
+```cmd
 python windows.camera.server\server.py --port 8081
+```
 
-# 2. Start containers (WSL2) — skip if already running
+**Or from WSL2** (no need to switch terminal):
+```bash
+cmd.exe /c start "Windows Camera Server" \
+  python.exe "$(wslpath -w "$(pwd)/windows.camera.server/server.py")" \
+  --port 8081
+```
+
+Verify: `curl -s http://host.docker.internal:8081/health`
+
+### Step 2 — Start containers (WSL2)
+
+Skip containers that are already running:
+```bash
 docker start localstack camera-proxy micropython-builder
+```
 
-# 3. Wait for LocalStack IoT
+### Step 3 — Wait for LocalStack IoT to be ready
+
+```bash
 until docker exec localstack \
     curl -sf http://localhost:4566/_localstack/health | grep -q '"iot"'; do
   sleep 2
 done
+echo "LocalStack ready."
+```
 
-# 4. Start emulator
+### Step 4 — Start the emulator
+
+```bash
 docker start esp32p4-emulator
+```
 
-# 5. Attach REPL
+### Step 5 — Attach REPL
+
+```bash
 mpremote connect socket://localhost:2323
+```
 
-# 6. Stop everything
+Press `Ctrl-X` to exit `mpremote`.
+
+### Step 6 — Stop everything
+
+```bash
 docker stop esp32p4-emulator micropython-builder camera-proxy localstack
 ```
+
+The Windows camera server (if started from CMD) must be stopped with `Ctrl-C` in its own window. If launched via `cmd.exe /c start` from WSL2, close the CMD window that opened.
 
 ---
 
