@@ -57,29 +57,35 @@ pip install opencv-python
 
 ## First-time setup
 
-### Step 1 — Set WiFi credentials in .env
+### Step 1 — Create secret.json
 
 ```bash
-cp .env.example .env
+cp secret.json.example secret.json
 ```
 
-Edit `.env` and set your real values:
+Edit `secret.json` and set your real values:
+```json
+{
+  "wifi_ssid":     "your-wifi-ssid",
+  "wifi_password": "your-wifi-password",
+  "mqtt_broker":   "192.168.1.100",
+  "mqtt_port":     1883,
+  "thing_name":    "esp32p4-device-01"
+}
 ```
-WIFI_SSID=your-wifi-ssid
-WIFI_PASSWORD=your-wifi-password
-```
 
-`.env` is listed in `.gitignore` — it will never be committed.
+`secret.json` is listed in `.gitignore` — it will never be committed.
 
-How credentials reach the firmware:
-- **Emulator**: `run-qemu.sh` reads `WIFI_SSID`/`WIFI_PASSWORD` from the
-  container environment and writes them into `emulator_config.py` on the
-  virtual flash. `boot.py` imports from `emulator_config`.
-- **Real hardware**: `upload-scripts` (`make upload-scripts`) reads `.env`,
-  generates `wifi_config.py`, and uploads it to the device via mpremote.
-  `boot.py` imports from `wifi_config`.
+How secrets reach the firmware:
+- All config is read via the `Secret` class in `secret.py` (frozen into firmware).
+- **Emulator**: `run-qemu.sh` reads WiFi credentials from the host's `secret.json`
+  (mounted read-only at `/secret.json`) and merges with emulator overrides
+  (`mqtt_broker=10.0.2.2`, `camera_proxy_url`, `emulator=true`), then writes
+  the merged `secret.json` into the virtual flash filesystem.
+- **Real hardware**: `upload-scripts` uploads `secret.json` directly to the
+  device filesystem. `secret.py` reads it at runtime.
 
-Do not edit `boot.py` directly for credentials.
+Do not edit `boot.py` or `main.py` directly for credentials.
 
 ---
 
@@ -259,8 +265,6 @@ a live feed from the built-in camera.
 
 ### Step 10 — Start the emulator
 
-`firmware-out/firmware.bin` must exist (Step 7) before running this.
-
 `firmware-out/firmware.bin` and `secret.json` must both exist before running this.
 
 ```bash
@@ -414,8 +418,10 @@ docker run -d \
   -p 1234:1234 \
   -v "$(pwd)/firmware-out:/firmware:ro" \
   -v "$(pwd)/micropython/src:/scripts:ro" \
+  -v "$(pwd)/secret.json:/secret.json:ro" \
   -e FIRMWARE_BIN=/firmware/firmware.bin \
   -e SCRIPTS_DIR=/scripts \
+  -e HOST_SECRET=/secret.json \
   -e FLASH_SIZE_MB=8 \
   -e FS_OFFSET=0x200000 \
   -e FS_SIZE_MB=2 \
@@ -560,7 +566,7 @@ micropython/
     micropython.cmake           Links modcamera.c + esp32-camera headers
   src/
     manifest.py                 Lists boot.py + main.py to freeze into firmware
-    boot.py                     WiFi connect on startup (edit SSID/PASSWORD)
+    boot.py                     WiFi connect via Secret.wifi_ssid() / Secret.wifi_password()
     main.py                     Camera capture + MQTT publish every 10 s
 
 scripts/
