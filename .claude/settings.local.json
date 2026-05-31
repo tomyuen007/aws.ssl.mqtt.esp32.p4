@@ -26,7 +26,13 @@
       "Bash(sed -n '425,455p' /mnt/c/git/work/claude.code/iot/mqtt/README.md)",
       "Bash(sed -n '78,95p' /mnt/c/git/work/claude.code/iot/mqtt/readme.txt)",
       "Bash(sed -n '245,290p' /mnt/c/git/work/claude.code/iot/mqtt/readme.txt)",
-      "Bash(sed -n '382,405p' /mnt/c/git/work/claude.code/iot/mqtt/readme.txt)"
+      "Bash(sed -n '382,405p' /mnt/c/git/work/claude.code/iot/mqtt/readme.txt)",
+      "PowerShell(git *)",
+      "Bash(sudo ln *)",
+      "Bash(chmod +x /mnt/c/git/work/claude.code/iot/mqtt/dov)",
+      "Bash(sudo cp /mnt/c/git/work/claude.code/iot/mqtt/dov /usr/local/bin/custom/dov)",
+      "Read(//usr/local/bin/custom/**)",
+      "Bash(pip install *)"
     ]
   }
 }

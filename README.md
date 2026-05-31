@@ -5,7 +5,7 @@
 
 ---
 
-## Current status — 2026-05-30
+## Current status — 2026-05-31
 
 ### Completed
 - [x] `Dockerfile.micropython` — ESP-IDF v5.4 + MicroPython v1.24.0 + `esp32-camera` component; compiles `firmware.bin` for `ESP32_P4_CAM` board at image build time
@@ -21,10 +21,18 @@
 - [x] `secret.json` git-ignored; `.env` committed (no secrets)
 - [x] All instructions use plain `docker` CLI — no `docker compose`
 - [x] GitHub repo: https://github.com/tomyuen007/aws.ssl.mqtt.esp32.p4
+- [x] Prerequisites documented with 3 numbered steps — AWS CLI, LocalStack (Windows + WSL), LocalStack auth token
+- [x] LocalStack installed on Windows (`C:\bin\localstack.exe`) and accessible from WSL bash via wrapper script at `/usr/local/bin/localstack`
+- [x] `C:\bin` added to WSL `$PATH` in `~/.bashrc`
+- [x] AWS CLI configured with dummy `test` credentials; `--endpoint-url http://localhost:4566` rule documented — no `awslocal` wrapper used
+- [x] Manual Docker CLI steps documented for MicroPython image with per-flag explanations and `docker-compose.yml` cross-references
 
-### Not yet tested — requires network / hardware
-- [ ] `docker build` for all three custom images (network was unavailable during dev session)
-- [ ] QEMU SLiRP DNS resolution in practice — `localstack` / `camera-proxy` hostnames resolve correctly inside the emulator
+### Not yet done
+- [ ] `LOCALSTACK_AUTH_TOKEN` added to `~/.bashrc` (Prerequisite 3)
+- [ ] `secret.json` created from `secret.json.example` and filled in (Step 1)
+- [ ] `docker build` for all three custom images
+- [ ] LocalStack container started and IoT service verified healthy
+- [ ] IoT thing / policy / certs provisioned via `setup-localstack.sh`
 - [ ] MicroPython REPL via `mpremote connect socket://localhost:2323`
 - [ ] Camera stream at `http://localhost:8080/stream`
 - [ ] MQTT publish/subscribe verified with `mosquitto_sub`
@@ -33,6 +41,12 @@
 
 ### Resume checklist
 ```
+-- Prerequisites (one-time) --
+P1. Install AWS CLI in WSL + aws configure with test/test credentials
+P2. Install LocalStack on Windows → copy to C:\bin → WSL PATH + wrapper script → localstack --version
+P3. echo 'export LOCALSTACK_AUTH_TOKEN=your-token' >> ~/.bashrc && source ~/.bashrc
+
+-- First-time setup --
 1.  cp secret.json.example secret.json        # fill in wifi_ssid, wifi_password
 2.  docker build -t esp32p4-camera-proxy:latest -f Dockerfile.camera-proxy .
 3.  docker build -t esp32p4-micropython:latest --target builder --build-arg MPY_TAG=v1.24.0 -f Dockerfile.micropython .
@@ -65,6 +79,81 @@ Reasons:
 
 ---
 
+## Decision: manual Docker CLI steps documented inline
+
+Each Docker command in this project is written out with every flag explained so any developer can understand what it does without prior Docker knowledge. The `docker-compose.yml` encodes the same configuration in declarative form — use it as a cross-reference to see how a plain `docker` command maps to a Compose service definition.
+
+---
+
+## Manual Docker CLI — MicroPython image reference
+
+These are the three commands needed to build the MicroPython firmware image, start a container from it, and extract the compiled `firmware.bin`. Each flag is explained so the command is self-documenting.
+
+### 1 — Build the image
+
+```bash
+docker build \
+  -t esp32p4-micropython:latest \
+  --target builder \
+  --build-arg MPY_TAG=v1.24.0 \
+  -f Dockerfile.micropython \
+  .
+```
+
+| Flag | What it does |
+|---|---|
+| `-t esp32p4-micropython:latest` | Names the resulting image `esp32p4-micropython` with tag `latest` |
+| `--target builder` | Stops at Stage 1 (`AS builder`) — skips the slim runtime stage |
+| `--build-arg MPY_TAG=v1.24.0` | Passes the MicroPython version to the `ARG MPY_TAG` in the Dockerfile |
+| `-f Dockerfile.micropython` | Specifies which Dockerfile to use |
+| `.` | Build context — the current directory; Docker uses this to resolve `COPY` instructions |
+
+Cross-reference in `docker-compose.yml`: `micropython-builder.build` (lines 77–82).
+
+### 2 — Start a container (keeps it alive for exec)
+
+```bash
+mkdir -p firmware-out
+
+docker run -d \
+  --name micropython-builder \
+  --network iot-net \
+  -v "$(pwd)/firmware-out:/firmware-out" \
+  -e EXTRA_COMPONENT_DIRS=/opt/esp32-camera \
+  --entrypoint tail \
+  esp32p4-micropython:latest \
+  -f /dev/null
+```
+
+| Flag | What it does |
+|---|---|
+| `-d` | Detached — runs in the background |
+| `--name micropython-builder` | Gives the container a name so other commands can reference it |
+| `--network iot-net` | Joins the shared bridge network so it can reach `localstack` and `camera-proxy` |
+| `-v "$(pwd)/firmware-out:/firmware-out"` | Bind-mounts the host `firmware-out/` directory into the container at `/firmware-out` |
+| `-e EXTRA_COMPONENT_DIRS=...` | Sets an environment variable the build system reads to locate `esp32-camera` |
+| `--entrypoint tail` | Overrides the image's default `CMD` so the container runs `tail -f /dev/null` instead of exiting |
+| `-f /dev/null` | Argument passed to `tail` — follows an empty file forever, keeping the container alive |
+
+Cross-reference in `docker-compose.yml`: `micropython-builder` service (lines 75–93).
+
+### 3 — Copy firmware out
+
+```bash
+docker exec micropython-builder \
+  bash -c "cp /opt/micropython/ports/esp32/build-ESP32_P4_CAM/firmware.bin /firmware-out/"
+
+ls -lh firmware-out/firmware.bin
+```
+
+| Part | What it does |
+|---|---|
+| `docker exec micropython-builder` | Runs a command inside the already-running container |
+| `bash -c "..."` | Runs the quoted string as a shell command inside the container |
+| `cp ... /firmware-out/` | Copies `firmware.bin` to the bind-mounted directory — file appears on the host immediately |
+
+---
+
 ## Services
 
 | Container | Image | Ports |
@@ -80,19 +169,120 @@ All containers share the bridge network `iot-net`.
 
 ## Prerequisites — install once
 
-**Docker Desktop for Windows**
-- Enable *Use WSL 2 based engine* in Settings → General
+### Prerequisite 1 — AWS CLI (WSL2)
 
-**AWS CLI (WSL2)**
+Install:
 ```bash
 curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
 unzip awscliv2.zip
 sudo ./aws/install
+aws --version
+```
+
+Configure with dummy credentials for LocalStack (no real AWS account needed):
+```bash
+aws configure
+# AWS Access Key ID:     test
+# AWS Secret Access Key: test
+# Default region name:   us-east-1
+# Default output format: json
+```
+
+All `aws` commands must include `--endpoint-url http://localhost:4566` to target LocalStack instead of real AWS. Do not use `awslocal` or any LocalStack-specific CLI wrapper.
+```bash
+aws --endpoint-url http://localhost:4566 iot list-things
+```
+
+---
+
+### Prerequisite 2 — LocalStack (Windows + WSL)
+
+**Install LocalStack on Windows** (run in Windows CMD or PowerShell):
+```cmd
+pip install localstack
+```
+
+Find where pip installed `localstack.exe`:
+```cmd
+where localstack
+```
+
+Create `C:\bin` and copy `localstack.exe` there:
+```cmd
+mkdir C:\bin
+copy "%LOCALAPPDATA%\Programs\Python\Python3x\Scripts\localstack.exe" C:\bin\
+```
+> Adjust the path to match the output of `where localstack` above.
+
+**Make LocalStack accessible from WSL bash:**
+
+Add `C:\bin` to the WSL `$PATH` and create a bash wrapper script so `localstack` works without `.exe`:
+```bash
+# Add C:\bin to PATH
+echo 'export PATH="/mnt/c/bin:$PATH"' >> ~/.bashrc
+
+# Create bash wrapper script
+sudo tee /usr/local/bin/localstack > /dev/null << 'EOF'
+#!/bin/bash
+/mnt/c/bin/localstack.exe "$@"
+EOF
+sudo chmod +x /usr/local/bin/localstack
+
+# Apply changes
+source ~/.bashrc
+```
+
+Verify:
+```bash
+localstack --version
+```
+
+---
+
+### Prerequisite 3 — LocalStack auth token in bash shell
+
+Add your LocalStack auth token to `~/.bashrc` so it is available every time the terminal starts:
+```bash
+echo 'export LOCALSTACK_AUTH_TOKEN=your-token-here' >> ~/.bashrc
+source ~/.bashrc
+```
+
+> If you are using LocalStack Community edition (free), skip this step — no token is required.
+
+Verify the token is set:
+```bash
+echo $LOCALSTACK_AUTH_TOKEN
+```
+
+---
+
+### Other tools
+
+**Docker Desktop for Windows**
+- Enable *Use WSL 2 based engine* in Settings → General
+
+Docker socket paths by platform — no `DOCKER_HOST` needed unless `docker info` fails:
+
+| Platform | `DOCKER_HOST` value |
+|---|---|
+| Windows | `npipe:///./pipe/docker_engine` |
+| WSL2 | `unix:///var/run/docker.sock` |
+| macOS (older Docker Desktop) | `unix:///var/run/docker.sock` |
+| macOS (Docker Desktop v4.13+) | `unix://$HOME/.docker/run/docker.sock` |
+
+Find the active socket on any platform:
+```bash
+docker context inspect | grep Host
 ```
 
 **mpremote (WSL2)**
 ```bash
 pip install mpremote
+```
+
+**mosquitto-clients — for verifying MQTT (WSL2)**
+```bash
+sudo apt install mosquitto-clients
 ```
 
 **Python + OpenCV (Windows CMD/PowerShell — for built-in camera)**
@@ -540,6 +730,675 @@ Before flashing, set `mqtt_broker` in `secret.json` to your host machine's LAN I
 
 `upload-scripts` uploads `secret.json` directly to the device — do not edit
 `boot.py` or `main.py` for credentials.
+
+---
+
+## Real AWS IoT Core setup
+
+Use this section when connecting a physical ESP32-P4 to AWS IoT Core instead of LocalStack.
+
+### One-time (shared across all devices)
+
+**1. Get your AWS IoT endpoint:**
+```bash
+aws iot describe-endpoint --endpoint-type iot:Data-ATS
+# output: {"endpointAddress": "<id>.iot.<region>.amazonaws.com"}
+```
+
+**2. Download the Amazon Root CA (same file for every device):**
+```bash
+mkdir -p certs
+curl -o certs/ca.pem https://www.amazontrust.com/repository/AmazonRootCA1.pem
+```
+
+**3. Create an IoT policy (one policy can be reused by all devices):**
+
+An IoT policy controls what an authenticated device is allowed to do.
+This policy lets any ESP32 in the fleet connect and publish/subscribe on `devices/*`.
+
+**3a. Look up your account ID and region:**
+```bash
+AWS_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+AWS_REGION=$(aws configure get region)
+echo "account=$AWS_ACCOUNT  region=$AWS_REGION"
+```
+
+**3b. Write `iot-policy.json` with your account and region substituted:**
+```bash
+cat > iot-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "iot:Connect",
+      "Resource": "arn:aws:iot:${AWS_REGION}:${AWS_ACCOUNT}:client/\${iot:Connection.Thing.ThingName}"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["iot:Publish", "iot:Subscribe", "iot:Receive"],
+      "Resource": "arn:aws:iot:${AWS_REGION}:${AWS_ACCOUNT}:topicfilter/devices/*"
+    }
+  ]
+}
+EOF
+```
+
+> The `${iot:Connection.Thing.ThingName}` variable is an AWS IoT policy variable —
+> it expands at connection time to the Thing name the device uses, so each device
+> can only connect with its own name. The leading `\` escapes it from shell expansion.
+
+**3c. Create the policy:**
+```bash
+aws iot create-policy \
+  --policy-name esp32p4-policy \
+  --policy-document file://iot-policy.json
+```
+
+**3d. Verify it was created:**
+```bash
+aws iot get-policy --policy-name esp32p4-policy
+```
+
+Expected output includes `"policyName": "esp32p4-policy"` and the ARN.
+If the policy already exists, `create-policy` returns an error — use
+`aws iot create-policy-version` to update it instead.
+
+---
+
+### Per device
+
+Run these steps once for each ESP32. Replace `esp32p4-device-01` with a unique name per device.
+
+**1. Create the Thing:**
+```bash
+aws iot create-thing --thing-name esp32p4-device-01
+```
+
+**2. Create the device certificate and key:**
+```bash
+CERT_ARN=$(aws iot create-keys-and-certificate \
+  --set-as-active \
+  --certificate-pem-outfile certs/device.pem.crt \
+  --public-key-outfile  certs/device.pub.key \
+  --private-key-outfile certs/device.key \
+  --query certificateArn --output text)
+
+echo "Certificate ARN: $CERT_ARN"
+```
+
+Both `certs/device.pem.crt` and `certs/device.key` are unique to this device.
+`certs/ca.pem` is the same file for every device.
+
+**3. Attach the policy and Thing to the certificate:**
+```bash
+aws iot attach-policy \
+  --policy-name esp32p4-policy \
+  --target "$CERT_ARN"
+
+aws iot attach-thing-principal \
+  --thing-name esp32p4-device-01 \
+  --principal "$CERT_ARN"
+```
+
+**4. Update `secret.json` for this device:**
+```json
+{
+  "wifi_ssid":       "your-wifi-ssid",
+  "wifi_password":   "your-wifi-password",
+  "mqtt_broker":     "<id>.iot.<region>.amazonaws.com",
+  "mqtt_ssl_port":   8883,
+  "thing_name":      "esp32p4-device-01",
+  "mqtt_ssl_verify": true,
+  "ca_cert":         "ca.pem",
+  "device_cert":     "device.pem.crt",
+  "device_key":      "device.key"
+}
+```
+
+**5. Upload certs and config to the device:**
+```bash
+mpremote connect /dev/ttyUSB0 \
+  cp certs/ca.pem          :ca.pem          + \
+  cp certs/device.pem.crt  :device.pem.crt  + \
+  cp certs/device.key      :device.key      + \
+  cp secret.json           :secret.json     + \
+  reset
+```
+
+The device connects to AWS IoT Core on port 8883 with full mutual TLS verification.
+
+> `certs/` is git-ignored — device keys are never committed.
+
+---
+
+## Fleet provisioning (many devices)
+
+Two approaches depending on whether you pre-provision certs before shipping or let devices provision themselves on first boot.
+
+---
+
+### Option A — Batch script (pre-provision before shipping)
+
+Use this when you flash each device in-house and copy its unique cert at flash time.
+The script calls the same AWS CLI commands as the "Per device" steps above, in parallel.
+
+`scripts/provision-fleet.sh` handles idempotency (skips already-provisioned devices)
+and runs up to `--jobs` AWS API calls in parallel to stay within AWS IoT rate limits.
+
+```bash
+# Provision 1000 devices, 10 parallel workers
+bash scripts/provision-fleet.sh --count 1000 --prefix esp32p4-device --jobs 10
+```
+
+Certs land in `certs/esp32p4-device-<NNNN>/` — one folder per device:
+```
+certs/
+  esp32p4-device-0001/
+    device.pem.crt
+    device.key
+    device.pub.key
+  esp32p4-device-0002/
+    ...
+```
+
+Flash and upload certs for a specific device (replace `0001` and port as needed):
+```bash
+THING=esp32p4-device-0001
+PORT=/dev/ttyUSB0
+
+# Write per-device secret.json
+jq --arg t "$THING" '.thing_name = $t' secret.json > /tmp/secret-device.json
+
+mpremote connect $PORT \
+  cp certs/$THING/device.pem.crt  :device.pem.crt  + \
+  cp certs/$THING/device.key      :device.key      + \
+  cp certs/ca.pem                 :ca.pem          + \
+  cp /tmp/secret-device.json      :secret.json     + \
+  reset
+```
+
+> `certs/` is git-ignored. Back up the entire `certs/` directory securely —
+> private keys cannot be re-downloaded from AWS after creation.
+
+---
+
+### Option B — AWS IoT Fleet Provisioning (devices self-provision on first boot)
+
+Use this when devices ship without unique certs. Each device holds a shared
+"claim certificate" burned into firmware. On first boot it connects to AWS IoT
+Core with the claim cert, calls the `RegisterThing` API, and receives its own
+unique cert which it stores in flash. Subsequent boots use the unique cert.
+
+**How it works:**
+
+```
+Device boots with claim cert
+        │
+        ▼
+Connects to AWS IoT Core (port 8883) using claim cert
+        │
+        ▼
+Calls MQTT API: $aws/provisioning-templates/<template>/provision/json
+        │
+        ▼
+AWS creates Thing + unique cert + attaches policy
+        │
+        ▼
+Device receives unique cert + key over MQTT, stores to flash
+        │
+        ▼
+Reconnects using unique cert — claim cert no longer needed
+```
+
+**Setup steps (AWS Console or CLI):**
+
+**1. Create a provisioning template:**
+```bash
+cat > fleet-provisioning-template.json <<'EOF'
+{
+  "Parameters": {
+    "ThingName": { "Type": "String" },
+    "AWS::IoT::Certificate::Id": { "Type": "String" }
+  },
+  "Resources": {
+    "thing": {
+      "Type": "AWS::IoT::Thing",
+      "Properties": { "ThingName": { "Ref": "ThingName" } }
+    },
+    "certificate": {
+      "Type": "AWS::IoT::Certificate",
+      "Properties": {
+        "CertificateId": { "Ref": "AWS::IoT::Certificate::Id" },
+        "Status": "Active"
+      }
+    },
+    "policy": {
+      "Type": "AWS::IoT::Policy",
+      "Properties": { "PolicyName": "esp32p4-policy" }
+    }
+  }
+}
+EOF
+
+aws iot create-provisioning-template \
+  --template-name esp32p4-fleet \
+  --template-body file://fleet-provisioning-template.json \
+  --provisioning-role-arn arn:aws:iam::<account-id>:role/IoTProvisioningRole \
+  --enabled
+```
+
+**2. Create claim certificates and claim policy:**
+
+**2a. Reuse the account and region variables from step 3a (or re-export them):**
+```bash
+AWS_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+AWS_REGION=$(aws configure get region)
+```
+
+**2b. Create the claim certificate and key:**
+```bash
+mkdir -p certs/claim
+CLAIM_ARN=$(aws iot create-keys-and-certificate \
+  --set-as-active \
+  --certificate-pem-outfile certs/claim/claim.pem.crt \
+  --public-key-outfile      certs/claim/claim.pub.key \
+  --private-key-outfile     certs/claim/claim.key \
+  --query certificateArn --output text)
+
+echo "Claim cert ARN: $CLAIM_ARN"
+```
+
+The claim policy is intentionally more restrictive than the device policy.
+It only allows connecting and publishing/subscribing to the Fleet Provisioning
+MQTT topics — nothing else. Once the device has its unique cert it no longer
+uses the claim cert.
+
+**2c. Write `claim-policy.json`:**
+```bash
+cat > claim-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "iot:Connect",
+      "Resource": "arn:aws:iot:${AWS_REGION}:${AWS_ACCOUNT}:client/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "iot:Publish",
+      "Resource": [
+        "arn:aws:iot:${AWS_REGION}:${AWS_ACCOUNT}:topic/\$aws/certificates/create/json",
+        "arn:aws:iot:${AWS_REGION}:${AWS_ACCOUNT}:topic/\$aws/provisioning-templates/esp32p4-fleet/provision/json"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["iot:Subscribe", "iot:Receive"],
+      "Resource": [
+        "arn:aws:iot:${AWS_REGION}:${AWS_ACCOUNT}:topicfilter/\$aws/certificates/create/json/accepted",
+        "arn:aws:iot:${AWS_REGION}:${AWS_ACCOUNT}:topicfilter/\$aws/certificates/create/json/rejected",
+        "arn:aws:iot:${AWS_REGION}:${AWS_ACCOUNT}:topicfilter/\$aws/provisioning-templates/esp32p4-fleet/provision/json/accepted",
+        "arn:aws:iot:${AWS_REGION}:${AWS_ACCOUNT}:topicfilter/\$aws/provisioning-templates/esp32p4-fleet/provision/json/rejected"
+      ]
+    }
+  ]
+}
+EOF
+```
+
+> The `\$aws` escapes prevent the shell from expanding `$aws` — it must arrive
+> in the JSON as a literal `$aws` because that is the AWS reserved topic prefix.
+
+**2d. Create the claim policy:**
+```bash
+aws iot create-policy \
+  --policy-name esp32p4-claim-policy \
+  --policy-document file://claim-policy.json
+```
+
+**2e. Verify it was created:**
+```bash
+aws iot get-policy --policy-name esp32p4-claim-policy
+```
+
+**2f. Attach the claim policy to the claim certificate:**
+```bash
+aws iot attach-policy \
+  --policy-name esp32p4-claim-policy \
+  --target "$CLAIM_ARN"
+```
+
+---
+
+### Why the claim policy is intentionally restricted
+
+#### Two certificates, two jobs
+
+There are two certificates in Fleet Provisioning. They have different policies because they serve completely different purposes.
+
+**The device policy** (`esp32p4-policy`) is attached to the unique cert a fully provisioned device receives. It allows the device to do its real job — publish telemetry, receive commands, send camera images.
+
+**The claim policy** (`esp32p4-claim-policy`) is attached to the claim cert that is burned into firmware before shipping. Every device in the batch shares the **same** claim cert. Because it is in the firmware binary, anyone who gets hold of a physical device could potentially extract it — so it must be treated as less secret than a unique device cert.
+
+#### What the claim policy allows vs blocks
+
+The claim policy allows only the six MQTT topics the provisioning handshake needs:
+
+| Topic | Direction | What it does |
+|---|---|---|
+| `$aws/certificates/create/json` | publish | "AWS, generate a unique cert for me" |
+| `$aws/certificates/create/json/accepted` | subscribe | AWS responds with the new cert |
+| `$aws/certificates/create/json/rejected` | subscribe | AWS rejects the request |
+| `$aws/provisioning-templates/esp32p4-fleet/provision/json` | publish | "Register me as a Thing using this template" |
+| `$aws/provisioning-templates/.../provision/json/accepted` | subscribe | AWS confirms registration |
+| `$aws/provisioning-templates/.../provision/json/rejected` | subscribe | AWS rejects registration |
+
+It **cannot** publish to `devices/*/telemetry`, subscribe to `devices/*/cmd`, or interact with any real device topic.
+
+#### What happens if a claim cert is stolen
+
+**With a wildcard resource policy (too permissive):**
+```
+Attacker uses stolen claim cert
+  → can publish fake sensor data to devices/*/telemetry
+  → can send commands to real devices via devices/*/cmd
+  → can impersonate any device, disrupt the entire fleet
+```
+
+**With the locked-down claim policy (what we use):**
+```
+Attacker uses stolen claim cert
+  → can only call RegisterThing and create rogue Things
+  → cannot publish to any real device topic
+  → cannot send commands to real devices
+  → cannot read any sensor data
+```
+
+The blast radius drops from **full fleet compromise** to **provisioning spam** — and even that can be stopped.
+
+#### Device serial number: blocking provisioning spam
+
+"Device serial number" here does **not** mean a printed label on the box. It means a hardware-unique identifier built into the ESP32 chip itself — specifically the **chip ID**, which is the same 48-bit value as the WiFi MAC address. It is burned into hardware fuses at the factory by Espressif and cannot be changed or forged by software. It is not stored in firmware, so extracting the firmware binary does not reveal it.
+
+When a device calls `RegisterThing` it sends a JSON payload that can include any attributes you choose. You include the chip ID as `SerialNumber`:
+
+Read it in MicroPython:
+```python
+import network
+chip_id = ':'.join('{:02x}'.format(b) for b in network.WLAN().config('mac'))
+# e.g. "a4:cf:12:34:56:78"
+```
+
+You include this in the `RegisterThing` payload:
+```json
+{
+  "certificateOwnershipToken": "<token from create step>",
+  "parameters": {
+    "SerialNumber": "a4cf12345678"
+  }
+}
+```
+
+Then attach a **Lambda pre-provisioning hook** to the provisioning template. AWS calls this Lambda before completing registration, passing it the `SerialNumber`. The Lambda checks the value against your manufacturing database (a DynamoDB table of chip IDs you produced and shipped). If the ID is not in the database, the Lambda returns `allowProvisioning: false` and AWS rejects the registration.
+
+```
+Device calls RegisterThing with SerialNumber=a4cf12345678
+        │
+        ▼
+AWS calls your Lambda with the serial number
+        │
+        ├── ID found in manufacturing DB → allowProvisioning: true  → Thing created
+        └── ID not in DB (attacker)      → allowProvisioning: false → rejected
+```
+
+This means a stolen claim cert is useless without a valid chip ID from your manufacturing run — and chip IDs are hardware-fused, not extractable from firmware alone.
+
+---
+
+**3. Burn claim certs into firmware:**
+
+Copy `certs/claim/claim.pem.crt` and `certs/claim/claim.key` alongside `certs/ca.pem`
+into `secret.json` as `device_cert` / `device_key` before flashing. All units in a
+production batch share the same claim cert in firmware.
+
+`main.py` must be extended to detect first boot (no unique cert in flash) and run
+the Fleet Provisioning MQTT flow before starting normal operation.
+
+> See [AWS Fleet Provisioning docs](https://docs.aws.amazon.com/iot/latest/developerguide/provision-wo-cert.html) for the full MQTT API and Python SDK example.
+
+---
+
+### Comparison
+
+| | Batch script | Fleet Provisioning |
+|---|---|---|
+| Unique cert per device | Yes — pre-generated | Yes — generated on first boot |
+| Requires in-house flashing step | Yes | No (claim cert in firmware) |
+| `main.py` changes needed | No | Yes (provisioning flow on first boot) |
+| Scales to large batches | Yes (parallel script) | Yes (fully automated) |
+| Best for | Lab / small production runs | Mass production / OTA rollout |
+
+---
+
+## End-to-end fleet workflow: manufacturing to ERP
+
+> **Visual reference:** `docs/erp-integration.pdf` — a generated PDF with colour-coded workflow diagrams covering all four phases. Regenerate with `python3 scripts/generate-erp-pdf.py`.
+
+This section describes the complete lifecycle of a device — from the factory floor to live in your ERP system — for a fleet of 1000 units using Fleet Provisioning.
+
+---
+
+### Phase 1 — One-time AWS infrastructure setup (before any devices are made)
+
+```
+AWS IoT Core
+  ├── IoT policy:           esp32p4-policy        (normal device operations)
+  ├── IoT policy:           esp32p4-claim-policy   (provisioning only)
+  ├── Provisioning template: esp32p4-fleet
+  │     └── pre-provisioning Lambda hook
+  └── Claim certificate:    certs/claim/claim.pem.crt + claim.key
+
+DynamoDB
+  └── Table: esp32p4-manufacturing
+        PK: chip_id  (e.g. "a4cf12345678")
+        Fields: batch_id, manufactured_date, firmware_version,
+                provisioned (false), provisioned_at, thing_name, erp_id
+```
+
+The pre-provisioning Lambda does two things:
+1. Checks `chip_id` against the DynamoDB table — rejects unknown devices
+2. On success, marks `provisioned=true` and records `thing_name` in DynamoDB
+
+---
+
+### Phase 2 — Manufacturing (per batch, at the factory)
+
+For each unit in the batch:
+
+```
+1. Read the chip ID from the board
+     esptool.py --port /dev/ttyUSB0 chip_id
+     # or in MicroPython: network.WLAN().config('mac')
+
+2. Record the chip ID in DynamoDB
+     aws dynamodb put-item \
+       --table-name esp32p4-manufacturing \
+       --item '{
+         "chip_id":           {"S": "a4cf12345678"},
+         "batch_id":          {"S": "BATCH-2026-001"},
+         "manufactured_date": {"S": "2026-05-31"},
+         "firmware_version":  {"S": "1.0.0"},
+         "provisioned":       {"BOOL": false}
+       }'
+
+3. Flash the firmware (claim cert baked in via secret.json)
+     esptool.py --chip esp32p4 --port /dev/ttyUSB0 --baud 460800 \
+       write_flash 0x0 firmware-out/firmware.bin
+
+4. Upload secret.json (contains claim cert paths, WiFi omitted — set by customer)
+     mpremote connect /dev/ttyUSB0 \
+       cp certs/claim/claim.pem.crt :device.pem.crt + \
+       cp certs/claim/claim.key     :device.key     + \
+       cp certs/ca.pem              :ca.pem         + \
+       cp secret.json               :secret.json    + \
+       reset
+
+5. Box and ship
+```
+
+All 1000 units leave the factory with identical firmware. The claim cert is shared. The chip ID is what makes each unit uniquely identifiable.
+
+---
+
+### Phase 3 — Device first boot (in the field, fully automatic)
+
+The customer powers on the device. Everything from here is automatic — no human intervention required.
+
+```
+Device boots
+│
+├── boot.py: connect to WiFi
+│
+├── main.py: check flash for unique cert
+│     no unique cert found → enter provisioning mode
+│
+├── Connect to AWS IoT Core using CLAIM cert (port 8883)
+│
+├── Read chip ID from hardware
+│     chip_id = network.WLAN().config('mac')  → "a4cf12345678"
+│
+├── STEP A — Request a new unique certificate
+│     Publish to: $aws/certificates/create/json
+│     Payload:    {} (empty)
+│     AWS responds on .../accepted:
+│       {
+│         "certificateId":             "abc123...",
+│         "certificatePem":            "-----BEGIN CERTIFICATE-----...",
+│         "privateKey":                "-----BEGIN RSA PRIVATE KEY-----...",
+│         "certificateOwnershipToken": "token-xyz"
+│       }
+│
+├── STEP B — Register as a Thing
+│     Publish to: $aws/provisioning-templates/esp32p4-fleet/provision/json
+│     Payload:
+│       {
+│         "certificateOwnershipToken": "token-xyz",
+│         "parameters": { "SerialNumber": "a4cf12345678" }
+│       }
+│
+├── AWS calls pre-provisioning Lambda
+│     Lambda receives: SerialNumber = "a4cf12345678"
+│     Lambda queries DynamoDB → chip_id found, provisioned=false
+│     Lambda updates DynamoDB: provisioned=true, provisioned_at=now,
+│                              thing_name="esp32p4-a4cf12345678"
+│     Lambda returns: { "allowProvisioning": true,
+│                       "parameterOverrides": {
+│                         "ThingName": "esp32p4-a4cf12345678" } }
+│
+├── AWS creates Thing "esp32p4-a4cf12345678"
+│     Activates unique cert, attaches esp32p4-policy
+│
+├── Device receives .../provision/json/accepted
+│     { "thingName": "esp32p4-a4cf12345678",
+│       "deviceConfiguration": {} }
+│
+├── Device writes unique cert + key + thingName to flash
+│     uos.rename or open('/device.pem.crt', 'w').write(certificatePem)
+│     open('/device.key',      'w').write(privateKey)
+│     # update secret.json: thing_name = "esp32p4-a4cf12345678"
+│
+├── Disconnect claim cert session
+│
+└── Reconnect using UNIQUE cert → normal operation begins
+```
+
+---
+
+### Phase 4 — ERP registration (automatic, triggered on first connection)
+
+After reconnecting with the unique cert, the device publishes a one-time registration message.
+
+```
+Device publishes to: devices/esp32p4-a4cf12345678/registered
+Payload:
+  {
+    "thing_name":       "esp32p4-a4cf12345678",
+    "chip_id":          "a4cf12345678",
+    "firmware_version": "1.0.0",
+    "timestamp":        1748700000
+  }
+```
+
+An **AWS IoT Rule** listens on `devices/+/registered` and triggers a Lambda:
+
+```
+IoT Rule:  SELECT * FROM 'devices/+/registered'
+              → Lambda: register-device-in-erp
+
+Lambda receives the payload and calls your ERP REST API:
+  POST https://erp.yourcompany.com/api/devices
+  {
+    "serial":    "a4cf12345678",
+    "thing":     "esp32p4-a4cf12345678",
+    "firmware":  "1.0.0",
+    "activated": "2026-05-31T12:00:00Z"
+  }
+
+ERP creates the device record:
+  - assigns internal asset ID
+  - links to customer / site if pre-registered in ERP
+  - sets status = "active"
+  - stores thing_name for future AWS → ERP lookups
+
+Lambda writes erp_id back to DynamoDB:
+  aws dynamodb update-item \
+    --table-name esp32p4-manufacturing \
+    --key '{"chip_id": {"S": "a4cf12345678"}}' \
+    --update-expression "SET erp_id = :id" \
+    --expression-attribute-values '{":id": {"S": "ERP-00123"}}'
+```
+
+---
+
+### Full picture
+
+```
+FACTORY                    FIELD                        CLOUD
+───────                    ─────                        ─────
+Flash firmware        →    Power on
+Record chip_id in DB       WiFi connect
+Ship device           →    First boot: no unique cert
+                           Connect with claim cert   →  AWS IoT Core
+                           Send chip_id              →  Lambda: validate chip_id
+                                                     ←  allowProvisioning=true
+                           Receive unique cert        ←  AWS creates Thing
+                           Store cert to flash
+                           Reconnect (unique cert)   →  AWS IoT Core
+                           Publish /registered       →  IoT Rule
+                                                     →  Lambda → ERP API
+                                                        ERP record created
+                           Normal operation          →  telemetry / images / cmds
+```
+
+---
+
+### DynamoDB table state across the lifecycle
+
+| Stage | `provisioned` | `provisioned_at` | `thing_name` | `erp_id` |
+|---|---|---|---|---|
+| Flashed at factory | `false` | — | — | — |
+| First boot complete | `true` | timestamp | `esp32p4-a4cf...` | — |
+| ERP registered | `true` | timestamp | `esp32p4-a4cf...` | `ERP-00123` |
+
+---
+
+### Idempotency: what if the device reboots mid-provisioning?
+
+- If the device reboots before writing the unique cert to flash, it starts provisioning again from scratch. AWS will create a new cert each time — the previous incomplete cert should be cleaned up by the Lambda (deactivate certs with no attached Thing).
+- If the device reboots after writing the unique cert but before publishing `/registered`, it reconnects with the unique cert and publishes `/registered` again. The ERP Lambda should be idempotent — check if `erp_id` already exists in DynamoDB before calling the ERP API.
+- If the device has already provisioned (`provisioned=true` in DynamoDB), the Lambda pre-provisioning hook should return `allowProvisioning=false` to block a second provisioning attempt for the same chip ID.
 
 ---
 
