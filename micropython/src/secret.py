@@ -39,7 +39,16 @@ class Secret:
 
     @classmethod
     def mqtt_broker(cls):
+        """Broker address for real hardware (LAN IP or AWS endpoint)."""
         return cls.get("mqtt_broker", "192.168.1.100")
+
+    @classmethod
+    def mqtt_broker_emulator(cls):
+        """Broker address when running in the Docker/QEMU emulator.
+        Resolves to 10.0.2.2 (QEMU user-net host) which socat relays
+        to the localstack container on the Docker bridge network.
+        """
+        return cls.get("mqtt_broker_emulator", "10.0.2.2")
 
     @classmethod
     def mqtt_port(cls):

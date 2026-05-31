@@ -116,12 +116,17 @@ try:
 except (OSError, IOError):
     print("  host secret.json not found, using default WiFi credentials")
 
+# mqtt_broker_emulator in the host secret.json takes priority;
+# falls back to the MQTT_BROKER env var (default 10.0.2.2).
+broker = host.get("mqtt_broker_emulator", os.environ["MQTT_BROKER"])
+
 secret = {
-    "wifi_ssid":        host.get("wifi_ssid", "myssid"),
-    "wifi_password":    host.get("wifi_password", ""),
-    "mqtt_broker":      os.environ["MQTT_BROKER"],
-    "mqtt_port":        int(os.environ["MQTT_PORT"]),
-    "mqtt_ssl_port":    8883,
+    "wifi_ssid":             host.get("wifi_ssid", "myssid"),
+    "wifi_password":         host.get("wifi_password", ""),
+    "mqtt_broker":           broker,
+    "mqtt_broker_emulator":  broker,
+    "mqtt_port":             int(os.environ["MQTT_PORT"]),
+    "mqtt_ssl_port":         8883,
     "thing_name":       os.environ["THING_NAME"],
     "camera_proxy_url": "http://10.0.2.2:" + os.environ["CAMERA_PROXY_PORT"] + "/frame.jpg",
     # emulator=true tells main.py to use plain TCP (mqtt_port) not SSL (mqtt_ssl_port)

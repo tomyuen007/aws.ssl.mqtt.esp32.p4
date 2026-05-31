@@ -4,8 +4,9 @@ from umqtt.robust import MQTTClient
 from secret import Secret
 
 THING_NAME       = Secret.thing_name()
-MQTT_BROKER      = Secret.mqtt_broker()
 EMULATOR         = Secret.is_emulator()
+# Select broker: Docker-specific address for the emulator, LAN/AWS for hardware
+MQTT_BROKER      = Secret.mqtt_broker_emulator() if EMULATOR else Secret.mqtt_broker()
 CAMERA_PROXY_URL = Secret.camera_proxy_url()
 
 # ── Transport: plain TCP in the emulator, SSL on real hardware ─────────────────
