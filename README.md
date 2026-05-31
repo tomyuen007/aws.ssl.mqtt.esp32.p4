@@ -26,6 +26,13 @@
 - [x] `C:\bin` added to WSL `$PATH` in `~/.bashrc`
 - [x] AWS CLI configured with dummy `test` credentials; `--endpoint-url http://localhost:4566` rule documented — no `awslocal` wrapper used
 - [x] Manual Docker CLI steps documented for MicroPython image with per-flag explanations and `docker-compose.yml` cross-references
+- [x] Real AWS IoT Core setup documented — CA cert download, IoT policy creation (step-by-step with account/region lookup, heredoc `\$aws` escaping explained), claim policy with locked-down Fleet Provisioning topics
+- [x] Fleet provisioning documented — Option A batch script (`provision-fleet.sh`, parallel, idempotent) and Option B AWS IoT Fleet Provisioning with claim cert flow
+- [x] `windows.camera.server/` — moved from `scripts/`; split into `server.py`, `list_cameras.py`, `requirements.txt`; `/health` endpoint enhanced with frame/error counts
+- [x] End-to-end fleet workflow documented — 4 phases: manufacturing → first boot → ERP registration → normal operation; DynamoDB lifecycle table; idempotency handling
+- [x] `docs/erp-integration.pdf` — 4-page PDF with flowcharts and swim lane diagram; regenerate with `scripts/generate-erp-pdf.py`
+- [x] Docker socket paths documented for WSL2, Windows, and macOS (including symlink note and three-slash rule)
+- [x] Daily workflow, rebuild firmware, and file structure sections expanded
 
 ### Not yet done
 - [ ] `LOCALSTACK_AUTH_TOKEN` added to `~/.bashrc` (Prerequisite 3)
