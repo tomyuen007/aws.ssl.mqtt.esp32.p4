@@ -502,12 +502,25 @@ Creates (idempotent — safe to re-run):
 
 Skip if using `CAMERA_SOURCE=pattern`.
 
-**From Windows CMD or PowerShell:**
+See [windows.camera.server](#windowscameraserver) for full setup and options.
+
+**One-time setup (Windows CMD or PowerShell):**
+```cmd
+cd windows.camera.server
+pip install -r requirements.txt
+```
+
+**Optional — list camera indices if unsure which to use:**
+```cmd
+python windows.camera.server\list_cameras.py
+```
+
+**Run from Windows CMD or PowerShell:**
 ```cmd
 python windows.camera.server\server.py --port 8081
 ```
 
-**Or from WSL2** (opens a new Windows CMD window):
+**Or from WSL2** (opens a new Windows CMD window without switching):
 ```bash
 cmd.exe /c start "Windows Camera Server" \
   python.exe "$(wslpath -w "$(pwd)/windows.camera.server/server.py")" \
@@ -516,8 +529,7 @@ cmd.exe /c start "Windows Camera Server" \
 
 When Windows Firewall prompts for network access, click **Allow**.
 
-Verify: open `http://localhost:8081/stream` in a browser — you should see
-a live feed from the built-in camera.
+Verify: open `http://localhost:8081/stream` in a browser — live MJPEG feed from the built-in camera.
 
 ---
 
@@ -1406,6 +1418,95 @@ Ship device           →    First boot: no unique cert
 - If the device reboots before writing the unique cert to flash, it starts provisioning again from scratch. AWS will create a new cert each time — the previous incomplete cert should be cleaned up by the Lambda (deactivate certs with no attached Thing).
 - If the device reboots after writing the unique cert but before publishing `/registered`, it reconnects with the unique cert and publishes `/registered` again. The ERP Lambda should be idempotent — check if `erp_id` already exists in DynamoDB before calling the ERP API.
 - If the device has already provisioned (`provisioned=true` in DynamoDB), the Lambda pre-provisioning hook should return `allowProvisioning=false` to block a second provisioning attempt for the same chip ID.
+
+---
+
+## windows.camera.server
+
+Standalone Windows-side camera server that captures the built-in camera via DirectShow and serves JPEG frames over HTTP for the Docker `camera-proxy` container.
+
+### Folder structure
+
+```
+windows.camera.server/
+  server.py           Main HTTP server — captures camera, serves /frame.jpg and /stream
+  list_cameras.py     Utility to probe available DirectShow camera indices
+  requirements.txt    opencv-python
+```
+
+### One-time setup
+
+Run once from **Windows CMD or PowerShell** (not WSL):
+```cmd
+cd windows.camera.server
+pip install -r requirements.txt
+```
+
+### Find available camera indices
+
+If you have multiple cameras or the default index 0 does not work:
+```cmd
+python windows.camera.server\list_cameras.py
+```
+
+Example output:
+```
+Scanning camera indices 0–4 (DirectShow) ...
+
+  [0]  640x480  — readable
+  [1]  not available
+  [2]  not available
+
+Use --index 0 with server.py
+Example:  python server.py --index 0 --port 8081
+```
+
+### Run the server
+
+**From Windows CMD or PowerShell:**
+```cmd
+python windows.camera.server\server.py --port 8081
+```
+
+**From WSL2** (without switching to a Windows terminal):
+```bash
+cmd.exe /c start "Windows Camera Server" \
+  python.exe "$(wslpath -w "$(pwd)/windows.camera.server/server.py")" \
+  --port 8081
+```
+
+When Windows Firewall prompts, click **Allow**.
+
+### Command-line options
+
+| Option | Default | Description |
+|---|---|---|
+| `--index` | `0` | DirectShow camera index — use `list_cameras.py` to find the right one |
+| `--port` | `8081` | HTTP port the server listens on |
+| `--width` | `640` | Capture width in pixels |
+| `--height` | `480` | Capture height in pixels |
+| `--quality` | `85` | JPEG quality 1–100 |
+
+### Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /frame.jpg` | Latest JPEG frame — what `camera-proxy` polls every ~33 ms |
+| `GET /stream` | MJPEG stream — open in a browser for a live preview |
+| `GET /health` | JSON status: `{"ok":true,"source":"directshow","frames":N,"errors":N}` |
+
+### Verify it is working
+
+From a browser on any machine on the same network:
+```
+http://localhost:8081/stream
+```
+
+From WSL2 or Docker (via `host.docker.internal`):
+```bash
+curl -s http://host.docker.internal:8081/health
+# {"ok":true,"source":"directshow","frames":142,"errors":0}
+```
 
 ---
 

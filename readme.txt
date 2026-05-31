@@ -1331,6 +1331,78 @@ END-TO-END FLEET WORKFLOW: MANUFACTURING TO ERP
 
 
 ================================================================================
+WINDOWS.CAMERA.SERVER
+================================================================================
+
+  Standalone Windows-side camera server. Captures the built-in camera via
+  DirectShow and serves JPEG frames over HTTP for the Docker camera-proxy.
+
+--- Folder structure ---
+
+  windows.camera.server/
+    server.py           Main HTTP server -- captures camera, serves endpoints
+    list_cameras.py     Utility to probe available DirectShow camera indices
+    requirements.txt    opencv-python
+
+--- One-time setup ---
+
+  Run once from Windows CMD or PowerShell (NOT WSL):
+    cd windows.camera.server
+    pip install -r requirements.txt
+
+--- Find available camera indices ---
+
+  If you have multiple cameras or index 0 does not work:
+    python windows.camera.server\list_cameras.py
+
+  Example output:
+    Scanning camera indices 0-4 (DirectShow) ...
+
+      [0]  640x480  -- readable
+      [1]  not available
+
+    Use --index 0 with server.py
+    Example:  python server.py --index 0 --port 8081
+
+--- Run the server ---
+
+  From Windows CMD or PowerShell:
+    python windows.camera.server\server.py --port 8081
+
+  From WSL2 (without switching to a Windows terminal):
+    cmd.exe /c start "Windows Camera Server" \
+      python.exe "$(wslpath -w "$(pwd)/windows.camera.server/server.py")" \
+      --port 8081
+
+  When Windows Firewall prompts, click Allow.
+
+--- Command-line options ---
+
+  Option      Default  Description
+  ----------  -------  ------------------------------------------------
+  --index     0        DirectShow camera index (use list_cameras.py first)
+  --port      8081     HTTP port the server listens on
+  --width     640      Capture width in pixels
+  --height    480      Capture height in pixels
+  --quality   85       JPEG quality 1-100
+
+--- Endpoints ---
+
+  GET /frame.jpg   Latest JPEG frame (what camera-proxy polls every ~33 ms)
+  GET /stream      MJPEG stream (open in browser for live preview)
+  GET /health      JSON: {"ok":true,"source":"directshow","frames":N,"errors":N}
+
+--- Verify it is working ---
+
+  From a browser on any machine on the same network:
+    http://localhost:8081/stream
+
+  From WSL2 or Docker (via host.docker.internal):
+    curl -s http://host.docker.internal:8081/health
+    # {"ok":true,"source":"directshow","frames":142,"errors":0}
+
+
+================================================================================
 CAMERA MODES
 ================================================================================
 
