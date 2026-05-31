@@ -692,33 +692,61 @@ The Windows camera server (if started from CMD) must be stopped with `Ctrl-C` in
 
 ## Rebuild firmware
 
+Choose the path that matches what you changed:
+
+| Changed | Path |
+|---|---|
+| `boot.py` or `main.py` only | [Python files only](#python-files-only-bootpy--mainpy) — no QEMU restart needed |
+| `modcamera.c`, `sdkconfig.board`, `mpconfigboard.*` | [C code or board files](#c-code-or-board-files-modcamerac-sdkconfigboard-etc) — full recompile + restart |
+| `secret.json` only | Re-upload with `mpremote` — see [Flash to physical ESP32-P4 hardware](#flash-to-physical-esp32-p4-hardware) |
+
 ### Python files only (boot.py / main.py)
 
-Re-upload to the running emulator without restarting QEMU:
+Re-upload to the **running** emulator without restarting QEMU. The scripts
+directory is bind-mounted into the emulator so `inject-scripts` picks up the
+latest versions from `micropython/src/`:
+
 ```bash
 docker exec esp32p4-emulator \
   inject-scripts --host localhost --port 2323 --dir /scripts
 ```
 
+The emulator resets automatically after upload. Re-attach the REPL:
+```bash
+mpremote connect socket://localhost:2323
+```
+
 ### C code or board files (modcamera.c, sdkconfig.board, etc.)
 
+A full recompile is needed. The emulator must be stopped, recreated with the
+new firmware, and restarted.
+
+**Step 1 — Recompile inside the running builder container:**
 ```bash
-# Recompile inside the running builder container
 docker exec micropython-builder \
   bash -c "cd /opt/micropython/ports/esp32 && \
     make BOARD=ESP32_P4_CAM \
          USER_C_MODULES=modules_camera/micropython.cmake \
          FROZEN_MANIFEST=modules_frozen/manifest.py \
          -j\$(nproc)"
+```
 
-# Copy new firmware to host
+**Step 2 — Copy new firmware to host:**
+```bash
 docker exec micropython-builder \
   bash -c "cp /opt/micropython/ports/esp32/build-ESP32_P4_CAM/firmware.bin \
            /firmware-out/"
 
-# Restart the emulator to pick up the new firmware
-docker stop esp32p4-emulator && docker rm esp32p4-emulator
+ls -lh firmware-out/firmware.bin   # confirm it updated
+```
 
+**Step 3 — Stop and remove the old emulator container:**
+```bash
+docker stop esp32p4-emulator && docker rm esp32p4-emulator
+```
+
+**Step 4 — Start a new emulator container with the updated firmware:**
+```bash
 docker run -d \
   --name esp32p4-emulator \
   --network iot-net \
@@ -742,6 +770,11 @@ docker run -d \
   -e SERIAL_PORT=2323 \
   -e GDB_PORT=1234 \
   esp32p4-emulator:latest
+```
+
+**Step 5 — Attach REPL to confirm boot:**
+```bash
+mpremote connect socket://localhost:2323
 ```
 
 ---
