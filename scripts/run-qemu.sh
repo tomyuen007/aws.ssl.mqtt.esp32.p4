@@ -58,7 +58,10 @@ if [[ ! -f "${FIRMWARE_BIN}" ]]; then
     exit 1
 fi
 
-# ── 2. MQTT relay: QEMU user-net host (10.0.2.2) -> LocalStack ───────────────
+# ── 2. MQTT relay: fallback for clients that connect to 10.0.2.2 directly ─────
+# QEMU SLiRP DNS resolves "localstack" via the container DNS (127.0.0.11),
+# so the firmware can connect by name. This socat relay handles any client
+# still using the 10.0.2.2 address directly (e.g. during DNS failure).
 echo "==> MQTT relay  0.0.0.0:${MQTT_PORT} -> ${LOCALSTACK_HOST}:${MQTT_PORT}"
 socat TCP-LISTEN:${MQTT_PORT},fork,reuseaddr \
       TCP:${LOCALSTACK_HOST}:${MQTT_PORT} &
