@@ -5,6 +5,53 @@
 
 ---
 
+## Current status — 2026-05-30
+
+### Completed
+- [x] `Dockerfile.micropython` — ESP-IDF v5.4 + MicroPython v1.24.0 + `esp32-camera` component; compiles `firmware.bin` for `ESP32_P4_CAM` board at image build time
+- [x] `Dockerfile.qemu` — Espressif QEMU from source (`esp-develop` branch, `riscv32-softmmu`, `esp32p4` machine) + `mklittlefs`
+- [x] `Dockerfile.camera-proxy` — Python/OpenCV HTTP server; modes: `network` (Windows built-in camera via DirectShow), `v4l2` (USB via usbipd-win), `pattern` (test)
+- [x] `Secret` class (`secret.py`) — single access point for all config; reads `secret.json` from device filesystem; frozen into firmware
+- [x] `boot.py` — WiFi via `Secret.wifi_ssid()` / `Secret.wifi_password()`
+- [x] `main.py` — camera capture + MQTT publish every 10 s; SSL branch when `emulator=false`
+- [x] `modcamera.c` — MicroPython C module wrapping `esp_camera_*` for MIPI CSI-2
+- [x] SSL/TLS on real hardware (port 8883); plain TCP in emulator (port 1883)
+- [x] `setup-localstack.sh` — provisions IoT thing/policy; saves `device.pem.crt`, `device.key`, `ca.pem`
+- [x] QEMU SLiRP DNS — emulator resolves `localstack` and `camera-proxy` by Docker service name via `127.0.0.11`; socat relays kept as DNS-failure fallback
+- [x] `secret.json` git-ignored; `.env` committed (no secrets)
+- [x] All instructions use plain `docker` CLI — no `docker compose`
+- [x] GitHub repo: https://github.com/tomyuen007/aws.ssl.mqtt.esp32.p4
+
+### Not yet tested — requires network / hardware
+- [ ] `docker build` for all three custom images (network was unavailable during dev session)
+- [ ] QEMU SLiRP DNS resolution in practice — `localstack` / `camera-proxy` hostnames resolve correctly inside the emulator
+- [ ] MicroPython REPL via `mpremote connect socket://localhost:2323`
+- [ ] Camera stream at `http://localhost:8080/stream`
+- [ ] MQTT publish/subscribe verified with `mosquitto_sub`
+- [ ] SSL handshake with LocalStack on port 8883 (`mqtt_ssl_verify=false`)
+- [ ] Physical ESP32-P4 hardware — camera, WiFi, SSL to LocalStack and AWS IoT Core
+
+### Resume checklist
+```
+1.  cp secret.json.example secret.json        # fill in wifi_ssid, wifi_password
+2.  docker build -t esp32p4-camera-proxy:latest -f Dockerfile.camera-proxy .
+3.  docker build -t esp32p4-micropython:latest --target builder --build-arg MPY_TAG=v1.24.0 -f Dockerfile.micropython .
+4.  docker build -t esp32p4-emulator:latest -f Dockerfile.qemu .
+5.  docker network create iot-net
+6.  docker volume create localstack_data
+7.  docker run -d --name localstack ...       # Step 4 in README
+8.  docker run -d --name camera-proxy ...     # Step 5
+9.  docker run -d --name micropython-builder ... # Step 6
+10. docker exec micropython-builder bash -c "cp .../firmware.bin /firmware-out/"
+11. AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test THING_NAME=esp32p4-device-01 bash scripts/setup-localstack.sh
+12. python scripts\windows-camera-server.py --port 8081   # Windows CMD
+13. docker run -d --name esp32p4-emulator ...  # Step 10 in README
+14. mpremote connect socket://localhost:2323
+15. mosquitto_sub -h localhost -p 1883 -t "devices/#" -v
+```
+
+---
+
 ## Decision: plain `docker` CLI — no `docker compose`
 
 All instructions use plain `docker` commands.  
