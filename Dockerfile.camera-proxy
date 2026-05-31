@@ -1,0 +1,29 @@
+# Lightweight OpenCV camera server.
+# Grabs frames from /dev/video0 (USB webcam via usbipd-win on WSL2) and
+# serves them as JPEG over HTTP so the ESP32-P4 QEMU emulator can use them.
+# Falls back to a generated test pattern when no camera device is present.
+
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        # V4L2 runtime and OpenCV shared-library deps
+        libgl1 libglib2.0-0 \
+        libv4l-dev v4l-utils \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir opencv-python-headless
+
+COPY scripts/camera-proxy.py /app/camera-proxy.py
+
+# CAMERA_DEVICE  index or path for cv2.VideoCapture  (default "0" → /dev/video0)
+# CAMERA_WIDTH / CAMERA_HEIGHT                        (default 640 × 480)
+# JPEG_QUALITY   1-100                               (default 85)
+# PORT           HTTP listen port                     (default 8080)
+ENV CAMERA_DEVICE=0 \
+    CAMERA_WIDTH=640 \
+    CAMERA_HEIGHT=480 \
+    JPEG_QUALITY=85 \
+    PORT=8080
+
+EXPOSE 8080
+
+CMD ["python3", "/app/camera-proxy.py"]

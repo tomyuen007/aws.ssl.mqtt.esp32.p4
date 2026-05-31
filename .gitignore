@@ -1,0 +1,11 @@
+# Secrets — never commit
+secret.json
+
+# Build artifacts
+firmware-out/
+certs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo

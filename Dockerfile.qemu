@@ -1,0 +1,70 @@
+# ── Stage 1: Espressif QEMU with ESP32-P4 (riscv32) machine support ───────────
+FROM ubuntu:24.04 AS qemu-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential git cmake ninja-build pkg-config python3 \
+        libglib2.0-dev libpixman-1-dev libfdt-dev libslirp-dev \
+        libssl-dev zlib1g-dev flex bison libncurses-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# esp-develop is the Espressif maintenance branch; ESP32-P4 machine was added
+# in the riscv32-softmmu target alongside ESP32-C3/C6.
+ARG QEMU_REF=esp-develop
+RUN git clone --depth 1 --branch "${QEMU_REF}" \
+        https://github.com/espressif/qemu.git /opt/qemu-src
+
+WORKDIR /opt/qemu-src
+RUN ./configure \
+        --target-list=riscv32-softmmu \
+        --enable-slirp \
+        --disable-docs \
+        --disable-gtk \
+        --disable-sdl \
+        --disable-opengl \
+        --disable-user \
+        --prefix=/opt/qemu \
+    && make -j"$(nproc)" \
+    && make install
+
+# ── Stage 2: mklittlefs — inject Python scripts into the flash FS ─────────────
+FROM ubuntu:24.04 AS lfs-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential git cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --recurse-submodules --depth 1 \
+        https://github.com/earlephilhower/mklittlefs.git /opt/mklittlefs \
+    && cd /opt/mklittlefs \
+    && make dist
+
+# ── Stage 3: emulator runtime image ───────────────────────────────────────────
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        # QEMU shared-library runtime deps
+        libglib2.0-0 libpixman-1-0 libfdt1 libslirp0 \
+        # Tooling
+        socat python3 python3-pip \
+    && pip3 install --break-system-packages mpremote esptool \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=qemu-builder /opt/qemu/bin/qemu-system-riscv32  /usr/local/bin/
+COPY --from=qemu-builder /opt/qemu/share/qemu/               /usr/local/share/qemu/
+COPY --from=lfs-builder  /opt/mklittlefs/mklittlefs          /usr/local/bin/
+
+# Helper scripts
+COPY scripts/run-qemu.sh          /usr/local/bin/run-qemu
+COPY scripts/inject-scripts.py    /usr/local/bin/inject-scripts
+RUN chmod +x /usr/local/bin/run-qemu /usr/local/bin/inject-scripts
+
+# /firmware  — bind-mount firmware-out/ from the host (firmware.bin lives here)
+# /scripts   — bind-mount micropython/src/ from the host  (boot.py, main.py …)
+VOLUME ["/firmware", "/scripts"]
+
+# TCP-serial console (telnet or mpremote connect socket://...:2323)
+EXPOSE 2323
+# GDB stub
+EXPOSE 1234
+
+ENTRYPOINT ["run-qemu"]

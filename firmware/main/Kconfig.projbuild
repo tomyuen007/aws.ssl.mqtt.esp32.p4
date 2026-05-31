@@ -1,0 +1,28 @@
+menu "IoT MQTT Configuration"
+
+    config WIFI_SSID
+        string "WiFi SSID"
+        default "myssid"
+        help
+            SSID of the AP to connect to.
+
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default "mypassword"
+        help
+            WiFi password.
+
+    config MQTT_BROKER_URL
+        string "MQTT Broker URL"
+        default "mqtt://192.168.1.100:1883"
+        help
+            URL of the MQTT broker. For LocalStack use the host machine IP
+            and port 1883, e.g. mqtt://192.168.1.10:1883
+
+    config IOT_THING_NAME
+        string "IoT Thing Name"
+        default "esp32p4-device-01"
+        help
+            Unique device identifier used as MQTT client ID and in topics.
+
+endmenu

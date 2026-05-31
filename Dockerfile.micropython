@@ -1,0 +1,58 @@
+# ── Stage 1: build MicroPython firmware for ESP32-P4 with camera ──────────────
+FROM espressif/idf:release-v5.4 AS builder
+
+# ── System deps ────────────────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3-pip python3-venv git cmake ninja-build ccache \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── MicroPython ────────────────────────────────────────────────────────────────
+ARG MPY_TAG=v1.24.0
+WORKDIR /opt
+RUN git clone --depth 1 --branch "${MPY_TAG}" \
+        https://github.com/micropython/micropython.git
+
+# Build the host-side bytecode compiler first (required before firmware build)
+RUN cd /opt/micropython && make -C mpy-cross -j"$(nproc)"
+
+# ── esp32-camera IDF component ─────────────────────────────────────────────────
+# Provides esp_camera_*() for both MIPI CSI-2 (P4) and DVP interfaces
+RUN git clone --depth 1 \
+        https://github.com/espressif/esp32-camera.git \
+        /opt/esp32-camera
+
+# Tell IDF to pick it up as an extra component
+ENV EXTRA_COMPONENT_DIRS=/opt/esp32-camera
+
+# ── Custom board + camera module ───────────────────────────────────────────────
+COPY micropython/boards/ESP32_P4_CAM \
+        /opt/micropython/ports/esp32/boards/ESP32_P4_CAM
+COPY micropython/modules \
+        /opt/micropython/ports/esp32/modules_camera
+
+# ── Build firmware ─────────────────────────────────────────────────────────────
+WORKDIR /opt/micropython/ports/esp32
+
+# Freeze the application Python scripts into the firmware image
+COPY micropython/src /opt/micropython/ports/esp32/modules_frozen
+
+RUN make \
+        BOARD=ESP32_P4_CAM \
+        USER_C_MODULES=/opt/micropython/ports/esp32/modules_camera/micropython.cmake \
+        FROZEN_MANIFEST=/opt/micropython/ports/esp32/modules_frozen/manifest.py \
+        -j"$(nproc)"
+
+# ── Stage 2: minimal runtime image that holds the built artifacts ──────────────
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip esptool \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder \
+        /opt/micropython/ports/esp32/build-ESP32_P4_CAM/firmware.bin \
+        /firmware/firmware.bin
+
+WORKDIR /firmware
+# Default: print help; override with `docker run ... flash /dev/ttyUSB0`
+CMD ["esptool.py", "--help"]
