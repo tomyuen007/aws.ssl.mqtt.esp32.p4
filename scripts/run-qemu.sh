@@ -121,8 +121,10 @@ secret = {
     "wifi_password":    host.get("wifi_password", ""),
     "mqtt_broker":      os.environ["MQTT_BROKER"],
     "mqtt_port":        int(os.environ["MQTT_PORT"]),
+    "mqtt_ssl_port":    8883,
     "thing_name":       os.environ["THING_NAME"],
     "camera_proxy_url": "http://10.0.2.2:" + os.environ["CAMERA_PROXY_PORT"] + "/frame.jpg",
+    # emulator=true tells main.py to use plain TCP (mqtt_port) not SSL (mqtt_ssl_port)
     "emulator":         True,
 }
 

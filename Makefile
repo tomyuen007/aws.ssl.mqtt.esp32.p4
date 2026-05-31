@@ -118,16 +118,24 @@ flash: firmware-out/firmware.bin
 erase:
 	esptool.py --chip esp32p4 --port $(PORT) erase_flash
 
-# Uploads secret.json (WiFi credentials), boot.py, and main.py to the device.
+# Uploads secret.json, TLS cert files (if present), boot.py, and main.py.
 # secret.py is already frozen in the firmware — no need to upload it separately.
 upload-scripts:
 	@test -f secret.json || \
 	  { echo "ERROR: secret.json not found. Run: cp secret.json.example secret.json"; exit 1; }
+	@# Upload core files
 	mpremote connect $(PORT) \
 	    cp secret.json :secret.json + \
 	    cp micropython/src/boot.py :boot.py + \
-	    cp micropython/src/main.py :main.py + \
-	    reset
+	    cp micropython/src/main.py :main.py
+	@# Upload TLS certs if they exist (skip silently if not present)
+	@test -f certs/device.pem.crt && \
+	  mpremote connect $(PORT) cp certs/device.pem.crt :device.pem.crt || true
+	@test -f certs/device.key && \
+	  mpremote connect $(PORT) cp certs/device.key :device.key || true
+	@test -f certs/ca.pem && \
+	  mpremote connect $(PORT) cp certs/ca.pem :ca.pem || true
+	mpremote connect $(PORT) reset
 
 monitor:
 	mpremote connect $(PORT)

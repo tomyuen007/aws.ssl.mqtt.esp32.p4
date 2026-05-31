@@ -5,16 +5,35 @@ from secret import Secret
 
 THING_NAME       = Secret.thing_name()
 MQTT_BROKER      = Secret.mqtt_broker()
-MQTT_PORT        = Secret.mqtt_port()
 EMULATOR         = Secret.is_emulator()
 CAMERA_PROXY_URL = Secret.camera_proxy_url()
 
-T_STATUS    = "devices/" + THING_NAME + "/status"
-T_TELEMETRY = "devices/" + THING_NAME + "/telemetry"
-T_IMAGE     = "devices/" + THING_NAME + "/image"
-T_CMD       = "devices/" + THING_NAME + "/cmd"
+# ── Transport: plain TCP in the emulator, SSL on real hardware ─────────────────
+# run-qemu.sh always sets emulator=true and mqtt_port=1883 in the generated
+# secret.json, so the virtual device never attempts SSL.
+# Real hardware (LocalStack or AWS) connects on mqtt_ssl_port (8883) with TLS.
 
-CAPTURE_INTERVAL_MS = 10_000
+if EMULATOR:
+    MQTT_PORT = Secret.mqtt_port()   # 1883 — plain TCP
+    _ssl_ctx  = None
+else:
+    import ssl
+    MQTT_PORT = Secret.mqtt_ssl_port()  # 8883 — TLS
+
+    _ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+    ca_cert    = Secret.ca_cert()
+    dev_cert   = Secret.device_cert()
+    dev_key    = Secret.device_key()
+    ssl_verify = Secret.mqtt_ssl_verify()
+
+    if ssl_verify and ca_cert:
+        # Real AWS: full mutual TLS with server verification
+        _ssl_ctx.load_verify_locations(ca_cert)
+    # else: LocalStack dev — skip CA verification (self-signed cert)
+
+    if dev_cert and dev_key:
+        _ssl_ctx.load_cert_chain(dev_cert, dev_key)
 
 # ── Camera ─────────────────────────────────────────────────────────────────────
 _camera_ok = False
@@ -43,7 +62,7 @@ _STUB_JPEG = (
 
 def _fetch_proxy_frame(url):
     import socket
-    url = url[7:]                          # strip "http://"
+    url = url[7:]
     host, rest = url.split("/", 1) if "/" in url else (url, "")
     path = "/" + rest
     host, port = (host.split(":") + ["80"])[:2]
@@ -52,12 +71,11 @@ def _fetch_proxy_frame(url):
         s = socket.socket()
         s.settimeout(3)
         s.connect((host, port))
-        req = (
+        s.send((
             "GET " + path + " HTTP/1.0\r\n"
             "Host: " + host + "\r\n"
             "Connection: close\r\n\r\n"
-        ).encode()
-        s.send(req)
+        ).encode())
         buf = b""
         while b"\r\n\r\n" not in buf:
             chunk = s.recv(1)
@@ -89,6 +107,12 @@ def capture_frame():
 
 
 # ── MQTT ───────────────────────────────────────────────────────────────────────
+T_STATUS    = "devices/" + THING_NAME + "/status"
+T_TELEMETRY = "devices/" + THING_NAME + "/telemetry"
+T_IMAGE     = "devices/" + THING_NAME + "/image"
+T_CMD       = "devices/" + THING_NAME + "/cmd"
+
+
 def on_cmd(topic, msg):
     print("cmd:", topic, msg)
     try:
@@ -109,6 +133,7 @@ client = MQTTClient(
     client_id = THING_NAME,
     server    = MQTT_BROKER,
     port      = MQTT_PORT,
+    ssl       = _ssl_ctx,
     keepalive = 60,
 )
 client.set_callback(on_cmd)
@@ -117,18 +142,20 @@ client.subscribe(T_CMD)
 client.publish(
     T_STATUS,
     ujson.dumps({
-        "state":    "online",
-        "chip":     "esp32p4",
-        "emulator": EMULATOR,
-        "camera":   "hardware" if _camera_ok else
-                    ("proxy" if CAMERA_PROXY_URL else "stub"),
+        "state":     "online",
+        "chip":      "esp32p4",
+        "emulator":  EMULATOR,
+        "transport": "plain" if EMULATOR else "ssl",
+        "camera":    "hardware" if _camera_ok else
+                     ("proxy" if CAMERA_PROXY_URL else "stub"),
     }),
     retain=True,
     qos=1,
 )
-print("MQTT ->", MQTT_BROKER, ":", MQTT_PORT)
+print("MQTT ->", MQTT_BROKER, ":", MQTT_PORT, "(plain)" if EMULATOR else "(SSL)")
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
+CAPTURE_INTERVAL_MS = 10_000
 seq      = 0
 last_cap = time.ticks_ms() - CAPTURE_INTERVAL_MS
 

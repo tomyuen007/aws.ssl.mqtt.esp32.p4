@@ -25,7 +25,7 @@ class Secret:
     def get(cls, key, default=None):
         return cls._load().get(key, default)
 
-    # ── Typed accessors ────────────────────────────────────────────────────────
+    # ── WiFi ───────────────────────────────────────────────────────────────────
 
     @classmethod
     def wifi_ssid(cls):
@@ -35,17 +35,49 @@ class Secret:
     def wifi_password(cls):
         return cls.get("wifi_password", "")
 
+    # ── MQTT ───────────────────────────────────────────────────────────────────
+
     @classmethod
     def mqtt_broker(cls):
         return cls.get("mqtt_broker", "192.168.1.100")
 
     @classmethod
     def mqtt_port(cls):
+        """Plain TCP port — used by the emulator only."""
         return int(cls.get("mqtt_port", 1883))
+
+    @classmethod
+    def mqtt_ssl_port(cls):
+        """TLS port — used on real hardware (LocalStack and AWS)."""
+        return int(cls.get("mqtt_ssl_port", 8883))
 
     @classmethod
     def thing_name(cls):
         return cls.get("thing_name", "esp32p4-device-01")
+
+    # ── SSL / TLS ──────────────────────────────────────────────────────────────
+
+    @classmethod
+    def mqtt_ssl_verify(cls):
+        """Verify server certificate.  False for LocalStack, True for real AWS."""
+        return bool(cls.get("mqtt_ssl_verify", False))
+
+    @classmethod
+    def ca_cert(cls):
+        """Path to CA certificate PEM file, or None to skip verification."""
+        return cls.get("ca_cert")
+
+    @classmethod
+    def device_cert(cls):
+        """Path to device certificate PEM file."""
+        return cls.get("device_cert")
+
+    @classmethod
+    def device_key(cls):
+        """Path to device private key PEM file."""
+        return cls.get("device_key")
+
+    # ── Runtime ────────────────────────────────────────────────────────────────
 
     @classmethod
     def camera_proxy_url(cls):
