@@ -1573,38 +1573,59 @@ MQTT TOPICS
 FILE STRUCTURE
 ================================================================================
 
-  Dockerfile.micropython      espressif/idf:v5.4 -> MicroPython firmware build
-  Dockerfile.qemu             Espressif QEMU + mklittlefs + runtime
-  Dockerfile.camera-proxy     Python/OpenCV HTTP camera server
-  docker-compose.yml          Reference only -- not used to run containers
-  Makefile                    Shortcut targets (wraps docker commands)
-  .env.example                Reference for environment variable names
+  Dockerfile.micropython          espressif/idf:v5.4 -> MicroPython firmware build
+  Dockerfile.qemu                 Espressif QEMU + mklittlefs + runtime
+  Dockerfile.camera-proxy         Python/OpenCV HTTP camera server
+  docker-compose.yml              Reference only -- not used to run containers
+  Makefile                        Shortcut targets (wraps docker commands)
+  .env                            Active environment variables (committed, no secrets)
+  .env.example                    Reference for all environment variable names
+  .gitignore                      Excludes secret.json, certs/, firmware-out/, .venv/
+  secret.json.example             Template for secret.json -- copy and fill in
+  dov                             Project utility shell script
 
   micropython/
     boards/ESP32_P4_CAM/
-      mpconfigboard.h         Enables camera module, names the board
-      mpconfigboard.cmake     Sets IDF_TARGET=esp32p4, sdkconfig chain
-      sdkconfig.board         360 MHz, SPIRAM Octal, MQTT buffer 8 KB
+      mpconfigboard.h             Enables camera module, names the board
+      mpconfigboard.cmake         Sets IDF_TARGET=esp32p4, sdkconfig chain
+      sdkconfig.board             360 MHz, SPIRAM Octal, MQTT buffer 8 KB
     modules/
-      modcamera.c             C module: camera.init / capture / deinit
-      micropython.cmake       Links modcamera.c + esp32-camera headers
+      modcamera.c                 C module: camera.init / capture / deinit
+      micropython.cmake           Links modcamera.c + esp32-camera headers
     src/
-      manifest.py             Lists boot.py + main.py to freeze into firmware
-      boot.py                 WiFi connect on startup  (edit SSID/PASSWORD)
-      main.py                 Camera capture + MQTT publish every 10 s
+      manifest.py                 Lists boot.py + main.py to freeze into firmware
+      boot.py                     WiFi connect via Secret.wifi_ssid/wifi_password()
+      main.py                     Camera capture + MQTT publish every 10 s; SSL on hw
+      secret.py                   Secret class -- reads secret.json from device flash
 
   scripts/
-    run-qemu.sh               Emulator entrypoint: flash image, socat, QEMU
-    inject-scripts.py         Uploads .py files via mpremote after QEMU boots
-    setup-localstack.sh       Provisions IoT thing / policy / cert
-    camera-proxy.py           HTTP server: v4l2 / network / pattern modes
-  windows.camera.server/
-    server.py             Windows DirectShow camera HTTP server (run on Windows)
-    list_cameras.py       List available camera indices before starting server.py
-    requirements.txt      opencv-python
+    run-qemu.sh                   Emulator entrypoint: flash image, socat, QEMU
+    inject-scripts.py             Uploads .py files via mpremote after QEMU boots
+    setup-localstack.sh           Provisions IoT thing / policy / cert on LocalStack
+    camera-proxy.py               HTTP camera server: v4l2 / network / pattern modes
+    provision-fleet.sh            Batch-provisions N devices in parallel (real AWS)
+    generate-erp-pdf.py           Generates docs/erp-integration.pdf workflow diagrams
+    requirements.txt              mpremote
 
-  firmware-out/               firmware.bin lands here after Step 7
-  certs/                      device.pem.crt from LocalStack after Step 8
+  windows.camera.server/
+    server.py                     Windows DirectShow camera HTTP server (run on Windows)
+    list_cameras.py               Probe available camera indices before running server.py
+    requirements.txt              opencv-python
+
+  firmware/
+    main/
+      mqtt_main.c                 ESP-IDF C reference implementation (not MicroPython)
+      CMakeLists.txt
+      Kconfig.projbuild
+    CMakeLists.txt
+    sdkconfig.defaults.esp32p4   IDF sdkconfig defaults for ESP32-P4
+
+  docs/
+    erp-integration.pdf           Fleet workflow diagrams (generate-erp-pdf.py)
+
+  firmware-out/                   firmware.bin lands here after build (git-ignored)
+  certs/                          Device certs from LocalStack / AWS (git-ignored)
+  secret.json                     Per-machine config -- never committed (git-ignored)
 
 
 ================================================================================
