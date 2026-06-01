@@ -1608,6 +1608,68 @@ curl -s http://host.docker.internal:8081/health
 
 ---
 
+## camera-proxy.py
+
+### Role
+
+`camera-proxy.py` runs inside the **`camera-proxy` Docker container** on WSL2. It is the single camera source for the emulated ESP32-P4. MicroPython `main.py` inside QEMU fetches `http://camera-proxy:8080/frame.jpg` every 10 seconds and publishes the bytes as an MQTT image message. `camera-proxy.py` is what provides those bytes.
+
+It acts as a **middle layer** that abstracts the camera source — MicroPython always talks to the same URL regardless of whether the real source is the Windows built-in camera, a USB webcam, or a test pattern.
+
+### Where it sits in the full chain
+
+```
+Windows camera (DirectShow)
+        │  windows.camera.server/server.py  (Windows, port 8081)
+        │  GET http://host.docker.internal:8081/frame.jpg
+        ▼
+camera-proxy container  ← camera-proxy.py runs here  (port 8080)
+        │  GET http://camera-proxy:8080/frame.jpg
+        ▼
+esp32p4-emulator  (MicroPython main.py, every 10 s)
+        │  MQTT publish  devices/<thing>/image
+        ▼
+localstack  (MQTT broker)
+```
+
+### What it does on startup
+
+1. Reads `CAMERA_SOURCE` env var and starts the matching background capture thread
+2. The capture thread writes the latest JPEG into a shared `_latest_jpeg` bytes buffer (thread-safe, protected by a lock)
+3. Starts an HTTP server on port 8080 — every `/frame.jpg` request reads from that buffer and returns it immediately
+
+### The three backends
+
+**`network` (default)** — polls `http://host.docker.internal:8081/frame.jpg` (i.e. `windows.camera.server/server.py` on Windows) every 100 ms. On fetch failure it silently falls back to the test pattern and logs a warning every 30 errors.
+
+**`v4l2`** — opens `/dev/video0` via OpenCV's V4L2 backend (USB webcam forwarded into WSL2 via `usbipd-win`). Reads frames at ~30 fps.
+
+**`pattern`** — generates an animated colour-bar test image with a moving grey scan line and frame counter using NumPy + OpenCV. No physical camera needed.
+
+**`auto`** (default when `CAMERA_SOURCE` is unset) — tries V4L2 first; falls back to `pattern` if no device is found.
+
+### Endpoints
+
+| Endpoint | Used by | Returns |
+|---|---|---|
+| `GET /frame.jpg` | MicroPython `main.py` every 10 s | Latest JPEG from whichever backend is active |
+| `GET /stream` | Browser for live developer preview | MJPEG multipart stream at ~10 fps |
+| `GET /health` | Monitoring / debug | `{"ok":true,"source":"network"\|"v4l2"\|"pattern"}` |
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `CAMERA_SOURCE` | `auto` | `network`, `v4l2`, `pattern`, or `auto` |
+| `CAMERA_URL` | `http://host.docker.internal:8081/frame.jpg` | URL to poll in `network` mode |
+| `CAMERA_DEVICE` | `0` | V4L2 device index in `v4l2` mode |
+| `CAMERA_WIDTH` | `640` | Capture / pattern width |
+| `CAMERA_HEIGHT` | `480` | Capture / pattern height |
+| `JPEG_QUALITY` | `85` | JPEG encode quality 1–100 |
+| `PORT` | `8080` | HTTP port the server listens on |
+
+---
+
 ## Camera modes
 
 ### How `windows.camera.server/server.py` fits into the project
