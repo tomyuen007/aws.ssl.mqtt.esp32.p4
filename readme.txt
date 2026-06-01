@@ -2738,7 +2738,6 @@ FILE STRUCTURE
     generate-system-diagram.py    Generates docs/system.entity.diagram.pdf
     wait.for.localstack.sh        Block until LocalStack IoT healthy (120 s timeout)
     one.liner.wait-for-localstack.sh  Same as above as a single paste-friendly line
-    requirements.txt              mpremote
 
   camera.proxy/
     server.py                     HTTP camera server -- Docker container entrypoint
