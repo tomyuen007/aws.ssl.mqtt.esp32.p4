@@ -830,6 +830,92 @@ BOOT.PY
 
 
 ================================================================================
+RUN-QEMU.SH
+================================================================================
+
+  Role
+  ----
+  run-qemu.sh is the entrypoint of the esp32p4-emulator Docker container. It
+  does everything needed to boot MicroPython firmware inside QEMU and connect
+  it to the Docker stack -- no manual steps after docker run.
+
+  What it does (6 steps)
+  -----------------------
+  Step 1  Validate firmware.bin exists
+  Step 2  Start socat MQTT relay     (0.0.0.0:1883 -> localstack:1883)
+  Step 3  Start socat camera relay   (0.0.0.0:8080 -> camera-proxy:8080)
+  Step 4  Build 8 MiB flash image    (pad with 0xFF, stamp firmware.bin at 0)
+  Step 5  Build littlefs filesystem  (copy *.py, generate secret.json,
+                                      mklittlefs)
+  Step 6  Launch QEMU                (ESP32-P4, serial on TCP 2323, GDB 1234)
+
+  Step 5 in detail -- secret.json generation
+  -------------------------------------------
+  run-qemu.sh generates secret.json for the emulator rather than using the
+  host file directly, because the emulator needs different addresses.
+
+  Host secret.json (mounted read-only at /secret.json)
+          |
+          |  read wifi_ssid, wifi_password, mqtt_broker_emulator
+          v
+  run-qemu.sh merges with emulator-specific overrides:
+    {
+      "wifi_ssid":        <from host secret.json>
+      "wifi_password":    <from host secret.json>
+      "mqtt_broker":      10.0.2.2    <- QEMU user-net host IP
+      "mqtt_port":        1883        <- plain TCP, no SSL
+      "camera_proxy_url": http://camera-proxy:8080/frame.jpg
+      "emulator":         true        <- main.py skips SSL entirely
+    }
+          |
+          v
+  Written into virtual flash filesystem via mklittlefs
+          |
+          v
+  MicroPython reads it at runtime via Secret._load()
+
+  emulator=true is the key flag -- main.py checks it at startup and skips
+  the entire SSL/TLS branch, using port 1883 with no certificate.
+
+  Networking inside QEMU
+  -----------------------
+  QEMU SLiRP gives the virtual device:
+    IP        10.0.2.10 (DHCP)
+    Gateway   10.0.2.2  (this container)
+
+  The firmware resolves localstack and camera-proxy by Docker DNS
+  (127.0.0.11), reaching them directly. The socat relays on 0.0.0.0:1883
+  and 0.0.0.0:8080 are fallbacks for connections using 10.0.2.2 directly
+  (e.g. during a DNS failure):
+
+    QEMU guest
+      connects to localstack:1883 (Docker DNS)   <- primary
+      or 10.0.2.2:1883 (socat relay)             <- fallback
+      |
+      v
+    socat relay inside container -> localstack container:1883
+
+  Environment variables
+  ----------------------
+  Variable            Default                       Description
+  ------------------  ----------------------------  --------------------------
+  FIRMWARE_BIN        /firmware/firmware.bin        Compiled MicroPython fw
+  SCRIPTS_DIR         /scripts                      .py files for flash
+  HOST_SECRET         /secret.json                  Host secret.json (WiFi)
+  FLASH_SIZE_MB       8                             Total flash size MiB
+  FS_OFFSET           0x200000                      littlefs partition start
+  FS_SIZE_MB          2                             littlefs partition size
+  MQTT_BROKER         10.0.2.2                      Broker in emulator secret
+  MQTT_PORT           1883                          Plain TCP port
+  THING_NAME          esp32p4-device-01             IoT Thing name
+  LOCALSTACK_HOST     localstack                    socat MQTT relay target
+  CAMERA_PROXY_HOST   camera-proxy                  socat camera relay target
+  CAMERA_PROXY_PORT   8080                          Camera proxy HTTP port
+  SERIAL_PORT         2323                          TCP serial console port
+  GDB_PORT            1234                          QEMU GDB stub port
+
+
+================================================================================
 SECRET.PY
 ================================================================================
 

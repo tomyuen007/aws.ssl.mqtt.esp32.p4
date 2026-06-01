@@ -861,6 +861,88 @@ SSID and password come from `Secret.wifi_ssid()` and `Secret.wifi_password()`, w
 
 ---
 
+## run-qemu.sh
+
+### Role
+
+`run-qemu.sh` is the **entrypoint of the `esp32p4-emulator` Docker container**. It does everything needed to boot MicroPython firmware inside QEMU and connect it to the rest of the Docker stack — no manual steps required once `docker run` starts the container.
+
+### What it does (6 steps)
+
+```
+Step 1 — Validate firmware.bin exists
+Step 2 — Start socat MQTT relay      (0.0.0.0:1883  → localstack:1883)
+Step 3 — Start socat camera relay    (0.0.0.0:8080  → camera-proxy:8080)
+Step 4 — Build 8 MiB flash image     (pad with 0xFF, stamp firmware.bin at offset 0)
+Step 5 — Build littlefs filesystem   (copy *.py from /scripts, generate secret.json, mklittlefs)
+Step 6 — Launch QEMU                 (ESP32-P4 machine, flash image, serial on TCP 2323, GDB on 1234)
+```
+
+### Step 5 in detail — secret.json generation
+
+This is the most important step. `run-qemu.sh` generates `secret.json` for the emulator rather than using the host's file directly, because the emulator needs different addresses than real hardware:
+
+```
+Host secret.json (mounted read-only at /secret.json)
+        │
+        │  read wifi_ssid, wifi_password, mqtt_broker_emulator
+        ▼
+run-qemu.sh merges with emulator-specific overrides:
+  {
+    "wifi_ssid":          <from host secret.json>
+    "wifi_password":      <from host secret.json>
+    "mqtt_broker":        10.0.2.2          ← QEMU user-net host IP
+    "mqtt_port":          1883              ← plain TCP, no SSL
+    "camera_proxy_url":   http://camera-proxy:8080/frame.jpg
+    "emulator":           true              ← main.py skips SSL entirely
+  }
+        │
+        ▼
+Written into virtual flash filesystem (via mklittlefs)
+        │
+        ▼
+MicroPython reads it at runtime via Secret._load()
+```
+
+`emulator=true` is the key flag — `main.py` checks it at startup and skips the entire SSL/TLS branch, using port 1883 with no certificate.
+
+### Networking inside QEMU
+
+QEMU's SLiRP network gives the virtual device:
+- IP `10.0.2.10` (DHCP)
+- Gateway `10.0.2.2` — this is the container itself
+
+The firmware resolves `localstack` and `camera-proxy` by Docker DNS (`127.0.0.11`), reaching them directly over the Docker bridge. The two socat relays on `0.0.0.0:1883` and `0.0.0.0:8080` are fallbacks for any connection that uses `10.0.2.2` directly (e.g. during a DNS failure):
+
+```
+QEMU guest
+  │  connects to localstack:1883 (via Docker DNS)   ← primary path
+  │  or 10.0.2.2:1883 (socat relay)                 ← fallback
+  ▼
+socat relay inside container  →  localstack container:1883
+```
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `FIRMWARE_BIN` | `/firmware/firmware.bin` | Path to compiled MicroPython firmware |
+| `SCRIPTS_DIR` | `/scripts` | Directory of `.py` files to put in flash |
+| `HOST_SECRET` | `/secret.json` | Host `secret.json` (WiFi creds source) |
+| `FLASH_SIZE_MB` | `8` | Total flash size in MiB |
+| `FS_OFFSET` | `0x200000` | littlefs partition start offset |
+| `FS_SIZE_MB` | `2` | littlefs partition size in MiB |
+| `MQTT_BROKER` | `10.0.2.2` | MQTT broker address written into emulator `secret.json` |
+| `MQTT_PORT` | `1883` | MQTT port (always plain TCP for emulator) |
+| `THING_NAME` | `esp32p4-device-01` | IoT Thing name / MQTT client ID |
+| `LOCALSTACK_HOST` | `localstack` | Hostname for socat MQTT relay target |
+| `CAMERA_PROXY_HOST` | `camera-proxy` | Hostname for socat camera relay target |
+| `CAMERA_PROXY_PORT` | `8080` | Camera proxy HTTP port |
+| `SERIAL_PORT` | `2323` | TCP port for serial console (`mpremote connect socket://localhost:2323`) |
+| `GDB_PORT` | `1234` | TCP port for QEMU GDB stub |
+
+---
+
 ## secret.py
 
 ### Role
