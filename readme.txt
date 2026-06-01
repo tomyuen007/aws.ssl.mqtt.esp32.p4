@@ -2350,6 +2350,105 @@ CAMERA.PROXY
 
 
 ================================================================================
+DOCKERFILE.MICROPYTHON
+================================================================================
+
+  Role
+  ----
+  Dockerfile.micropython builds esp32p4-micropython:latest -- the image that
+  compiles MicroPython firmware for the ESP32-P4. Two-stage build:
+    Stage 1 (builder): compiles firmware including custom camera C module and
+                       frozen Python scripts
+    Stage 2 (runtime): slim image holding firmware.bin + esptool for flashing
+
+  Firmware is compiled ONCE at docker build time and baked into the image.
+
+  Build command
+  --------------
+    docker build \
+      -t esp32p4-micropython:latest \
+      --target builder \
+      --build-arg MPY_TAG=v1.24.0 \
+      -f Dockerfile.micropython .
+
+  --target builder stops at Stage 1. Stage 2 is only for physical flashing.
+  Takes 15-30 min first build; Docker cache makes rebuilds fast.
+
+  What the build does (two stages)
+  ----------------------------------
+  Stage 1 -- builder  (espressif/idf:release-v5.4)
+        |
+        +-- apt: python3-pip python3-venv git cmake ninja-build ccache
+        |
+        +-- git clone --depth 1 --branch v1.24.0
+        |     micropython -> /opt/micropython/
+        |
+        +-- make -C mpy-cross   <- host-side bytecode compiler (required first)
+        |
+        +-- git clone esp32-camera -> /opt/esp32-camera/
+        |     ENV EXTRA_COMPONENT_DIRS=/opt/esp32-camera
+        |
+        +-- COPY micropython/boards/ESP32_P4_CAM
+        |     -> /opt/micropython/ports/esp32/boards/ESP32_P4_CAM/
+        +-- COPY micropython/modules
+        |     -> /opt/micropython/ports/esp32/modules_camera/
+        +-- COPY micropython/src
+        |     -> /opt/micropython/ports/esp32/modules_frozen/
+        |
+        +-- make BOARD=ESP32_P4_CAM
+                 USER_C_MODULES=modules_camera/micropython.cmake
+                 FROZEN_MANIFEST=modules_frozen/manifest.py
+                 -j$(nproc)
+              -> build-ESP32_P4_CAM/firmware.bin
+
+  Stage 2 -- runtime  (debian:bookworm-slim)
+        |
+        +-- apt: python3 python3-pip esptool
+        +-- COPY --from=builder firmware.bin -> /firmware/firmware.bin
+        +-- CMD ["esptool.py", "--help"]
+
+  What gets frozen into the firmware
+  ------------------------------------
+  manifest.py lists three files to freeze at compile time:
+    boot.py    <- WiFi connect (runs before main.py on every boot)
+    main.py    <- Camera capture + MQTT publish loop
+    secret.py  <- Secret class (reads secret.json from flash at runtime)
+
+  Frozen modules are compiled to bytecode and embedded in the firmware binary.
+  Always present on the device -- MicroPython resolves them before the
+  filesystem, so uploading a copy to flash has no effect.
+
+  Why mpy-cross must be built first
+  -----------------------------------
+  mpy-cross is MicroPython's host-side bytecode compiler. It converts .py
+  files to .mpy bytecode for embedding in firmware. The firmware build calls
+  mpy-cross internally when processing FROZEN_MANIFEST. Without it first,
+  the firmware build fails.
+
+  Why esp32-camera is a separate clone
+  --------------------------------------
+  esp32-camera is an Espressif IDF component providing esp_camera_*() APIs
+  for MIPI CSI-2 (ESP32-P4) and DVP. Not bundled with IDF or MicroPython --
+  must be cloned separately and added via EXTRA_COMPONENT_DIRS. modcamera.c
+  wraps those APIs as a MicroPython module.
+
+  Build arguments
+  ----------------
+  MPY_TAG   v1.24.0   MicroPython git tag to clone and build
+
+  Firmware output location
+  -------------------------
+  After docker build, firmware.bin is baked inside the image at:
+    /opt/micropython/ports/esp32/build-ESP32_P4_CAM/firmware.bin
+
+  Copy to host:
+    docker exec micropython-builder \
+      bash -c "cp .../firmware.bin /firmware-out/"
+
+  The emulator mounts firmware-out/ and uses firmware.bin as its flash image.
+
+
+================================================================================
 DOCKERFILE.CAMERA-PROXY
 ================================================================================
 

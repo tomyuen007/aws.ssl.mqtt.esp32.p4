@@ -2532,6 +2532,116 @@ python3 camera.proxy/list_cameras.py
 
 ---
 
+## Dockerfile.micropython
+
+### Role
+
+`Dockerfile.micropython` builds the `esp32p4-micropython:latest` image — the Docker image that compiles MicroPython firmware for the ESP32-P4. It is a **two-stage build**: Stage 1 (`builder`) compiles the full firmware including the custom camera C module and frozen Python scripts; Stage 2 (`runtime`) is a slim image that just holds the compiled `firmware.bin` alongside `esptool` for flashing.
+
+The firmware is compiled **once at `docker build` time** and baked into the image. The `micropython-builder` container that runs from this image keeps the firmware available for the emulator and for physical device flashing.
+
+### Build command
+
+```bash
+docker build \
+  -t esp32p4-micropython:latest \
+  --target builder \
+  --build-arg MPY_TAG=v1.24.0 \
+  -f Dockerfile.micropython .
+```
+
+`--target builder` stops at Stage 1. Stage 2 (`runtime`) is only needed when flashing a physical device directly from a container — the emulator workflow uses the builder stage.
+
+Takes **15–30 minutes** on first build (pulls `espressif/idf:release-v5.4`, clones MicroPython and `esp32-camera`). Docker layer cache makes rebuilds fast if only source files changed.
+
+### What the build does (two stages)
+
+```
+Stage 1 — builder  (espressif/idf:release-v5.4)
+      │
+      ├── apt: python3-pip python3-venv git cmake ninja-build ccache
+      │
+      ├── git clone --depth 1 --branch v1.24.0
+      │     https://github.com/micropython/micropython.git
+      │     → /opt/micropython/
+      │
+      ├── make -C mpy-cross       ← build host-side bytecode compiler
+      │     (required before firmware build)
+      │
+      ├── git clone --depth 1
+      │     https://github.com/espressif/esp32-camera.git
+      │     → /opt/esp32-camera/   (MIPI CSI-2 + DVP IDF component)
+      │     ENV EXTRA_COMPONENT_DIRS=/opt/esp32-camera
+      │
+      ├── COPY micropython/boards/ESP32_P4_CAM
+      │     → /opt/micropython/ports/esp32/boards/ESP32_P4_CAM/
+      │     (mpconfigboard.h, mpconfigboard.cmake, sdkconfig.board)
+      │
+      ├── COPY micropython/modules
+      │     → /opt/micropython/ports/esp32/modules_camera/
+      │     (modcamera.c, micropython.cmake)
+      │
+      ├── COPY micropython/src
+      │     → /opt/micropython/ports/esp32/modules_frozen/
+      │     (manifest.py, boot.py, main.py, secret.py)
+      │
+      └── make BOARD=ESP32_P4_CAM
+                USER_C_MODULES=modules_camera/micropython.cmake
+                FROZEN_MANIFEST=modules_frozen/manifest.py
+                -j$(nproc)
+            → build-ESP32_P4_CAM/firmware.bin  ← compiled output
+
+Stage 2 — runtime  (debian:bookworm-slim)
+      │
+      ├── apt: python3 python3-pip esptool
+      ├── COPY --from=builder firmware.bin → /firmware/firmware.bin
+      └── CMD ["esptool.py", "--help"]
+            (override at docker run with flash command for physical device)
+```
+
+### What gets frozen into the firmware
+
+`manifest.py` lists three files to freeze at compile time:
+
+```
+boot.py    ← WiFi connect (runs before main.py on every boot)
+main.py    ← Camera capture + MQTT publish loop
+secret.py  ← Secret class (reads secret.json from flash at runtime)
+```
+
+Frozen modules are compiled to bytecode and embedded directly in the firmware binary. They are always present on the device — even before any files are uploaded to flash — and MicroPython resolves them before the filesystem, so uploading a copy to flash has no effect.
+
+### Why `mpy-cross` must be built first
+
+`mpy-cross` is MicroPython's host-side bytecode compiler. It converts `.py` files to `.mpy` bytecode before embedding them into the firmware image. The firmware build (`make BOARD=...`) calls `mpy-cross` internally when processing the `FROZEN_MANIFEST`. If `mpy-cross` is not built first the firmware build fails.
+
+### Why `esp32-camera` is a separate clone
+
+`esp32-camera` is an Espressif IDF component that provides `esp_camera_*` APIs for both MIPI CSI-2 (ESP32-P4) and DVP interfaces. It is not bundled with IDF or MicroPython — it must be cloned separately and added via `EXTRA_COMPONENT_DIRS`. The `modcamera.c` C module in this repo wraps those APIs as a MicroPython module.
+
+### Build arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `MPY_TAG` | `v1.24.0` | MicroPython git tag to clone and build |
+
+### Firmware output location
+
+After `docker build`, `firmware.bin` is baked inside the image at:
+```
+/opt/micropython/ports/esp32/build-ESP32_P4_CAM/firmware.bin
+```
+
+Copy it to the host with:
+```bash
+docker exec micropython-builder \
+  bash -c "cp /opt/micropython/ports/esp32/build-ESP32_P4_CAM/firmware.bin /firmware-out/"
+```
+
+The emulator then mounts `firmware-out/` and uses `firmware.bin` as its flash image.
+
+---
+
 ## Dockerfile.camera-proxy
 
 ### Role
