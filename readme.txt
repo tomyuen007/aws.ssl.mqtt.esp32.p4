@@ -1900,20 +1900,32 @@ WINDOWS.CAMERA.SERVER
 
 
 ================================================================================
-CAMERA-PROXY.PY
+CAMERA.PROXY
 ================================================================================
 
   Role
   ----
-  camera.proxy/server.py runs inside the camera-proxy Docker container on WSL2. It is
-  the single camera source for the emulated ESP32-P4. MicroPython main.py
-  inside QEMU fetches http://camera-proxy:8080/frame.jpg every 10 seconds and
-  publishes the bytes as an MQTT image message. camera.proxy/server.py provides those
-  bytes.
+  camera.proxy is the Docker container package that provides camera frames to
+  the emulated ESP32-P4. server.py is the container entrypoint -- it runs
+  inside the camera-proxy container on WSL2, starts a capture backend, and
+  serves frames over HTTP. MicroPython main.py fetches
+  http://camera-proxy:8080/frame.jpg every 10 s and publishes the JPEG bytes
+  as an MQTT image message.
 
-  It acts as a middle layer that abstracts the camera source -- MicroPython
-  always talks to the same URL regardless of whether the real source is the
-  Windows built-in camera, a USB webcam, or a test pattern.
+  Middle layer: MicroPython always talks to the same URL regardless of whether
+  the real source is the Windows camera, USB webcam, or test pattern.
+
+  Folder structure
+  -----------------
+  camera.proxy/
+    server.py           Docker entrypoint -- env vars, backend start, HTTP server
+    list_cameras.py     Probe /dev/videoN; run to find CAMERA_DEVICE index
+    requirements.txt    opencv-python-headless, numpy
+    backends/
+      __init__.py       start() -- maps CAMERA_SOURCE to the right backend
+      v4l2.py           V4L2 capture ~30 fps; falls back to pattern on error
+      network.py        Polls windows.camera.server at 10 fps; pattern fallback
+      pattern.py        NumPy colour-bar; generate() shared by other backends
 
   Where it sits in the full chain
   --------------------------------
@@ -1921,7 +1933,10 @@ CAMERA-PROXY.PY
           | windows.camera.server/server.py  (Windows, port 8081)
           | GET http://host.docker.internal:8081/frame.jpg
           v
-  camera-proxy container  <- camera.proxy/server.py runs here  (port 8080)
+  camera-proxy container  <- camera.proxy/server.py  (port 8080)
+          |   backends/network.py  polls windows.camera.server
+          |   backends/v4l2.py     reads /dev/video0
+          |   backends/pattern.py  generates test frames
           | GET http://camera-proxy:8080/frame.jpg
           v
   esp32p4-emulator  (MicroPython main.py, every 10 s)
@@ -1929,33 +1944,46 @@ CAMERA-PROXY.PY
           v
   localstack  (MQTT broker)
 
-  What it does on startup
-  ------------------------
-  1. Reads CAMERA_SOURCE env var and starts the matching background thread
-  2. Capture thread writes latest JPEG into shared _latest_jpeg buffer
-     (protected by a lock)
-  3. Starts HTTP server on port 8080 -- /frame.jpg reads from the buffer
+  How server.py works
+  --------------------
+  Container starts -> python3 /app/server.py
+        |
+        +-- Read env vars (CAMERA_SOURCE, CAMERA_URL, CAMERA_DEVICE, ...)
+        +-- backends.start(SOURCE, state, ...)
+        |     starts one daemon capture thread
+        |     thread writes latest JPEG into shared state["jpeg"] (lock)
+        +-- time.sleep(0.15)  <- wait for first frame
+        +-- HTTPServer("0.0.0.0", PORT).serve_forever()
+                  |
+                  +-- GET /frame.jpg  read state["jpeg"], return image/jpeg
+                  +-- GET /stream     MJPEG multipart loop
+                  +-- GET /health     {"ok":true,"source":"..."}
 
-  The three backends
-  -------------------
-  network (default)
-    Polls http://host.docker.internal:8081/frame.jpg every 100 ms.
-    On fetch failure falls back silently to test pattern, logs every 30 errors.
+  The backends
+  -------------
+  Backend   File                  Behaviour
+  --------  --------------------  --------------------------------------------
+  network   backends/network.py   Polls CAMERA_URL every 100 ms; falls back
+                                  to pattern.generate() on error; warns every
+                                  30 consecutive failures
+  v4l2      backends/v4l2.py      Opens /dev/video0 via OpenCV V4L2; ~30 fps;
+                                  falls back to pattern.generate() on read err
+  pattern   backends/pattern.py   NumPy colour-bar + scan line + frame counter
+  auto      backends/__init__.py  Tries v4l2 first; falls back to pattern
 
-  v4l2
-    Opens /dev/video0 via OpenCV V4L2 backend (USB cam via usbipd-win).
-    Reads frames at ~30 fps.
+  pattern.py exports generate(n, width, height) so v4l2.py and network.py
+  can produce a test frame during fallback without duplicating drawing code.
 
-  pattern
-    Generates animated colour-bar test image with moving scan line and frame
-    counter using NumPy + OpenCV. No physical camera needed.
-
-  auto (when CAMERA_SOURCE unset)
-    Tries V4L2 first; falls back to pattern if no device found.
+  list_cameras.py
+  ----------------
+  Run to find available V4L2 device indices before setting CAMERA_DEVICE:
+    docker exec camera-proxy python3 /app/list_cameras.py
+    # or on WSL2 host:
+    python3 camera.proxy/list_cameras.py
 
   Endpoints
   ----------
-  GET /frame.jpg   Latest JPEG -- what MicroPython fetches every 10 s
+  GET /frame.jpg   Latest JPEG -- MicroPython fetches this every 10 s
   GET /stream      MJPEG multipart stream ~10 fps (open in browser)
   GET /health      {"ok":true,"source":"network"|"v4l2"|"pattern"}
 
@@ -1963,7 +1991,7 @@ CAMERA-PROXY.PY
   ----------------------
   CAMERA_SOURCE    auto      network / v4l2 / pattern / auto
   CAMERA_URL       http://host.docker.internal:8081/frame.jpg
-  CAMERA_DEVICE    0         V4L2 device index
+  CAMERA_DEVICE    0         V4L2 device index (use list_cameras.py to find)
   CAMERA_WIDTH     640       Capture / pattern width
   CAMERA_HEIGHT    480       Capture / pattern height
   JPEG_QUALITY     85        JPEG encode quality 1-100

@@ -2014,13 +2014,27 @@ curl -s http://host.docker.internal:8081/health
 
 ---
 
-## camera.proxy/server.py
+## camera.proxy
 
 ### Role
 
-`camera.proxy/server.py` runs inside the **`camera-proxy` Docker container** on WSL2. It is the single camera source for the emulated ESP32-P4. MicroPython `main.py` inside QEMU fetches `http://camera-proxy:8080/frame.jpg` every 10 seconds and publishes the bytes as an MQTT image message. `camera.proxy/server.py` is what provides those bytes.
+`camera.proxy` is the **Docker container package** that provides camera frames to the emulated ESP32-P4. `server.py` is the container entrypoint — it runs inside the `camera-proxy` container on WSL2, starts a capture backend, and serves frames over HTTP. MicroPython `main.py` inside QEMU fetches `http://camera-proxy:8080/frame.jpg` every 10 seconds and publishes the bytes as an MQTT image message.
 
 It acts as a **middle layer** that abstracts the camera source — MicroPython always talks to the same URL regardless of whether the real source is the Windows built-in camera, a USB webcam, or a test pattern.
+
+### Folder structure
+
+```
+camera.proxy/
+  server.py             Docker entrypoint — reads env vars, starts backend, serves HTTP
+  list_cameras.py       Probe /dev/videoN devices; run before server.py to find index
+  requirements.txt      opencv-python-headless, numpy
+  backends/
+    __init__.py         start() — maps CAMERA_SOURCE to the right backend module
+    v4l2.py             V4L2 capture loop (~30 fps, falls back to pattern on read error)
+    network.py          Polls windows.camera.server at 10 fps, falls back on error
+    pattern.py          NumPy colour-bar test image; generate() shared by other backends
+```
 
 ### Where it sits in the full chain
 
@@ -2030,6 +2044,9 @@ Windows camera (DirectShow)
         │  GET http://host.docker.internal:8081/frame.jpg
         ▼
 camera-proxy container  ← camera.proxy/server.py runs here  (port 8080)
+        │     backends/network.py polls windows.camera.server
+        │     backends/v4l2.py reads /dev/video0
+        │     backends/pattern.py generates test frames
         │  GET http://camera-proxy:8080/frame.jpg
         ▼
 esp32p4-emulator  (MicroPython main.py, every 10 s)
@@ -2038,28 +2055,50 @@ esp32p4-emulator  (MicroPython main.py, every 10 s)
 localstack  (MQTT broker)
 ```
 
-### What it does on startup
+### How server.py works
 
-1. Reads `CAMERA_SOURCE` env var and starts the matching background capture thread
-2. The capture thread writes the latest JPEG into a shared `_latest_jpeg` bytes buffer (thread-safe, protected by a lock)
-3. Starts an HTTP server on port 8080 — every `/frame.jpg` request reads from that buffer and returns it immediately
+```
+Container starts → python3 /app/server.py
+      │
+      ├── Read env vars (CAMERA_SOURCE, CAMERA_URL, CAMERA_DEVICE, ...)
+      ├── backends.start(SOURCE, state, ...)
+      │     → starts one daemon capture thread
+      │     → thread writes latest JPEG into shared state["jpeg"] (lock-protected)
+      ├── time.sleep(0.15)  ← wait for first frame
+      └── HTTPServer("0.0.0.0", PORT).serve_forever()
+                │
+                ├── GET /frame.jpg  → read state["jpeg"], return as image/jpeg
+                ├── GET /stream     → MJPEG multipart loop
+                └── GET /health     → {"ok":true,"source":"..."}
+```
 
-### The three backends
+### The backends
 
-**`network` (default)** — polls `http://host.docker.internal:8081/frame.jpg` (i.e. `windows.camera.server/server.py` on Windows) every 100 ms. On fetch failure it silently falls back to the test pattern and logs a warning every 30 errors.
+| Backend | File | Behaviour |
+|---|---|---|
+| `network` | `backends/network.py` | Polls `CAMERA_URL` every 100 ms; falls back to `pattern.generate()` on error, logs warning every 30 failures |
+| `v4l2` | `backends/v4l2.py` | Opens `/dev/video0` via OpenCV V4L2; reads at ~30 fps; falls back to `pattern.generate()` on read failure |
+| `pattern` | `backends/pattern.py` | NumPy colour-bar with animated scan line and frame counter; no hardware needed |
+| `auto` | `backends/__init__.py` | Tries v4l2 first; silently falls back to pattern if device not found |
 
-**`v4l2`** — opens `/dev/video0` via OpenCV's V4L2 backend (USB webcam forwarded into WSL2 via `usbipd-win`). Reads frames at ~30 fps.
+`backends/pattern.py` exports `generate(n, width, height)` so `v4l2.py` and `network.py` can produce a test frame during fallback without duplicating the drawing code.
 
-**`pattern`** — generates an animated colour-bar test image with a moving grey scan line and frame counter using NumPy + OpenCV. No physical camera needed.
+### list_cameras.py
 
-**`auto`** (default when `CAMERA_SOURCE` is unset) — tries V4L2 first; falls back to `pattern` if no device is found.
+Run inside the container (or directly on the host) to find available V4L2 device indices before setting `CAMERA_DEVICE`:
+
+```bash
+docker exec camera-proxy python3 /app/list_cameras.py
+# or on WSL2 host:
+python3 camera.proxy/list_cameras.py
+```
 
 ### Endpoints
 
 | Endpoint | Used by | Returns |
 |---|---|---|
-| `GET /frame.jpg` | MicroPython `main.py` every 10 s | Latest JPEG from whichever backend is active |
-| `GET /stream` | Browser for live developer preview | MJPEG multipart stream at ~10 fps |
+| `GET /frame.jpg` | MicroPython `main.py` every 10 s | Latest JPEG from active backend |
+| `GET /stream` | Browser for live preview | MJPEG multipart stream at ~10 fps |
 | `GET /health` | Monitoring / debug | `{"ok":true,"source":"network"\|"v4l2"\|"pattern"}` |
 
 ### Environment variables
@@ -2067,10 +2106,10 @@ localstack  (MQTT broker)
 | Variable | Default | Description |
 |---|---|---|
 | `CAMERA_SOURCE` | `auto` | `network`, `v4l2`, `pattern`, or `auto` |
-| `CAMERA_URL` | `http://host.docker.internal:8081/frame.jpg` | URL to poll in `network` mode |
-| `CAMERA_DEVICE` | `0` | V4L2 device index in `v4l2` mode |
-| `CAMERA_WIDTH` | `640` | Capture / pattern width |
-| `CAMERA_HEIGHT` | `480` | Capture / pattern height |
+| `CAMERA_URL` | `http://host.docker.internal:8081/frame.jpg` | URL polled by `network` backend |
+| `CAMERA_DEVICE` | `0` | V4L2 device index — use `list_cameras.py` to find |
+| `CAMERA_WIDTH` | `640` | Capture / pattern frame width |
+| `CAMERA_HEIGHT` | `480` | Capture / pattern frame height |
 | `JPEG_QUALITY` | `85` | JPEG encode quality 1–100 |
 | `PORT` | `8080` | HTTP port the server listens on |
 
