@@ -2319,6 +2319,90 @@ DOCKERFILE.CAMERA-PROXY
 
 
 ================================================================================
+DOCKERFILE.QEMU
+================================================================================
+
+  Role
+  ----
+  Dockerfile.qemu builds the esp32p4-emulator:latest image -- the Docker
+  image that runs the QEMU ESP32-P4 emulator. Three-stage build: two builder
+  stages compile QEMU and mklittlefs from source; a slim runtime stage
+  assembles the final image using only the compiled binaries.
+
+  Build command
+  --------------
+    docker build -t esp32p4-emulator:latest -f Dockerfile.qemu .
+
+  ~15-20 min on first build. Docker cache makes rebuilds instant.
+
+  What the build does (three stages)
+  ------------------------------------
+  Stage 1 -- qemu-builder  (ubuntu:24.04)
+        |
+        +-- apt: gcc/cmake/ninja/pkg-config + libglib/pixman/fdt/slirp dev
+        |
+        +-- git clone --depth 1 --branch esp-develop
+        |     https://github.com/espressif/qemu.git
+        |     (Espressif fork -- adds ESP32-P4 to riscv32-softmmu)
+        |
+        +-- ./configure --target-list=riscv32-softmmu
+        |               --enable-slirp  (SLiRP user-mode networking)
+        |               --disable-docs/gtk/sdl/opengl/user
+        +-- make -j$(nproc) && make install -> /opt/qemu/
+
+  Stage 2 -- lfs-builder  (ubuntu:24.04)
+        |
+        +-- apt: build-essential git cmake
+        +-- git clone mklittlefs (with submodules)
+        +-- make dist -> /opt/mklittlefs/mklittlefs
+
+  Stage 3 -- runtime  (ubuntu:24.04, final image)
+        |
+        +-- apt: libglib2.0-0 libpixman-1-0 libfdt1 libslirp0
+        |         socat python3 python3-pip
+        +-- pip: mpremote esptool
+        +-- COPY qemu-system-riscv32  -> /usr/local/bin/
+        +-- COPY share/qemu/          -> /usr/local/share/qemu/
+        +-- COPY mklittlefs           -> /usr/local/bin/
+        +-- COPY run-qemu.sh          -> /usr/local/bin/run-qemu
+        +-- COPY inject-scripts.py    -> /usr/local/bin/inject-scripts
+        +-- VOLUME ["/firmware", "/scripts"]
+        +-- EXPOSE 2323  (serial console TCP)
+        +-- EXPOSE 1234  (GDB stub TCP)
+        +-- ENTRYPOINT ["run-qemu"]
+
+  Why Espressif's QEMU fork
+  --------------------------
+  Upstream QEMU does not support the ESP32-P4. Espressif maintains a fork
+  that adds the esp32p4 machine type to riscv32-softmmu. The esp-develop
+  branch is the active maintenance branch.
+
+  Why three stages
+  -----------------
+  Builder stages need the full compiler toolchain (~500 MB). The runtime
+  image only needs compiled binaries + shared library deps (~80 MB).
+  Multi-stage build discards the toolchain entirely.
+
+  Key tools in the runtime image
+  --------------------------------
+  qemu-system-riscv32   Stage 1   Runs the ESP32-P4 virtual machine
+  mklittlefs            Stage 2   Packs scripts + secret.json into littlefs
+  socat                 apt       MQTT and camera DNS-fallback relays
+  mpremote              pip       Upload .py files over TCP serial
+  esptool               pip       Available for flash operations
+  run-qemu              COPY      Container entrypoint (run-qemu.sh)
+  inject-scripts        COPY      Hot-reload tool (inject-scripts.py)
+
+  Bind-mount volumes
+  -------------------
+  /firmware  <- firmware-out/ (host)      firmware.bin from micropython-builder
+  /scripts   <- micropython/src/ (host)   boot.py, main.py (secret.py skipped)
+
+  /secret.json is a third bind mount added at docker run time (single file,
+  not declared as VOLUME).
+
+
+================================================================================
 CAMERA MODES
 ================================================================================
 

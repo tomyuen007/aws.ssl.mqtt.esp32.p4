@@ -2501,6 +2501,101 @@ Docker caches each layer. Layer B (pip install) only re-runs if layer A changes 
 
 ---
 
+## Dockerfile.qemu
+
+### Role
+
+`Dockerfile.qemu` builds the `esp32p4-emulator:latest` image — the Docker image that runs the QEMU ESP32-P4 emulator. It is a **three-stage build**: two builder stages compile QEMU and `mklittlefs` from source, and a slim runtime stage assembles the final image using only the compiled binaries.
+
+### Build command
+
+```bash
+docker build -t esp32p4-emulator:latest -f Dockerfile.qemu .
+```
+
+Takes ~15–20 minutes on first build. Docker layer cache makes rebuilds instant if nothing changed.
+
+### What the build does (three stages)
+
+```
+Stage 1 — qemu-builder  (ubuntu:24.04)
+      │
+      ├── apt: build-essential git cmake ninja-build pkg-config
+      │         libglib2.0-dev libpixman-1-dev libfdt-dev
+      │         libslirp-dev libssl-dev zlib1g-dev flex bison
+      │
+      ├── git clone --depth 1 --branch esp-develop
+      │     https://github.com/espressif/qemu.git
+      │     (Espressif fork — adds ESP32-P4 to riscv32-softmmu target)
+      │
+      └── ./configure --target-list=riscv32-softmmu
+                      --enable-slirp        ← user-mode networking (SLiRP)
+                      --disable-docs/gtk/sdl/opengl/user
+            make -j$(nproc) && make install → /opt/qemu/
+
+Stage 2 — lfs-builder  (ubuntu:24.04)
+      │
+      ├── apt: build-essential git cmake
+      │
+      ├── git clone mklittlefs (with submodules)
+      │
+      └── make dist → /opt/mklittlefs/mklittlefs
+            (tool that packs a directory into a littlefs binary image)
+
+Stage 3 — runtime  (ubuntu:24.04, final image)
+      │
+      ├── apt: libglib2.0-0 libpixman-1-0 libfdt1 libslirp0
+      │         socat python3 python3-pip
+      │
+      ├── pip: mpremote esptool
+      │
+      ├── COPY --from=qemu-builder  qemu-system-riscv32 → /usr/local/bin/
+      ├── COPY --from=qemu-builder  share/qemu/          → /usr/local/share/qemu/
+      ├── COPY --from=lfs-builder   mklittlefs           → /usr/local/bin/
+      │
+      ├── COPY scripts/run-qemu.sh       → /usr/local/bin/run-qemu
+      ├── COPY scripts/inject-scripts.py → /usr/local/bin/inject-scripts
+      │
+      ├── VOLUME ["/firmware", "/scripts"]   ← bind-mount points
+      ├── EXPOSE 2323  (serial console TCP)
+      ├── EXPOSE 1234  (GDB stub TCP)
+      │
+      └── ENTRYPOINT ["run-qemu"]
+```
+
+### Why Espressif's QEMU fork
+
+Upstream QEMU does not support the ESP32-P4. Espressif maintains a fork at `github.com/espressif/qemu` that adds the `esp32p4` machine type to the `riscv32-softmmu` target. The `esp-develop` branch is the active maintenance branch for this support.
+
+### Why three stages
+
+The builder stages need the full compiler toolchain (GCC, CMake, headers) which is ~500 MB. The runtime image only needs the compiled binaries and their shared library dependencies — typically ~80 MB. The multi-stage build discards the toolchain entirely, keeping the final image small and free of build tools.
+
+### Key tools in the runtime image
+
+| Tool | Source | Purpose |
+|---|---|---|
+| `qemu-system-riscv32` | Stage 1 | Runs the ESP32-P4 virtual machine |
+| `mklittlefs` | Stage 2 | Packs scripts + `secret.json` into a littlefs flash image |
+| `socat` | apt | MQTT and camera relay — DNS fallback inside QEMU |
+| `mpremote` | pip | Upload `.py` files over TCP serial (`inject-scripts`) |
+| `esptool` | pip | Available inside container for flash operations |
+| `run-qemu` | COPY | Container entrypoint — see `run-qemu.sh` section |
+| `inject-scripts` | COPY | Hot-reload tool — see `inject-scripts.py` section |
+
+### Bind-mount volumes
+
+The `VOLUME` declaration documents the two expected bind mounts — they are not created automatically; the `docker run` command supplies them:
+
+| Container path | Host source | Contents |
+|---|---|---|
+| `/firmware` | `firmware-out/` | `firmware.bin` compiled by `micropython-builder` |
+| `/scripts` | `micropython/src/` | `boot.py`, `main.py` (and `secret.py`, which is skipped) |
+
+`/secret.json` (the host's `secret.json`) is a third bind mount added at `docker run` time — not declared as a VOLUME because it is a single file, not a directory.
+
+---
+
 ## Camera modes
 
 ### How `windows.camera.server/server.py` fits into the project
