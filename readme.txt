@@ -2502,6 +2502,93 @@ DOCKERFILE.QEMU
 
 
 ================================================================================
+CONTAINER FILE INVENTORY
+================================================================================
+
+  Files present inside each running container -- baked-in vs bind-mounted.
+
+--- localstack (official image -- no custom Dockerfile) ---
+
+  /var/lib/localstack/     <- bind-mounted from localstack_data volume
+  /var/run/docker.sock     <- bind-mounted from host (Docker access)
+
+--- camera-proxy ---
+
+  Built from Dockerfile.camera-proxy. All source files baked in under /app/:
+
+  /app/
+    server.py              <- HTTP server entrypoint (CMD)
+    list_cameras.py        <- V4L2 camera probe utility
+    requirements.txt
+    backends/
+      __init__.py          <- backend selection (CAMERA_SOURCE -> start())
+      v4l2.py              <- V4L2 capture loop
+      network.py           <- network fetch loop
+      pattern.py           <- NumPy test pattern generator
+
+  No bind mounts -- all files are COPY'd into the image at build time.
+
+--- micropython-builder ---
+
+  Built from Dockerfile.micropython (builder stage).
+
+  /opt/micropython/
+    ports/esp32/
+      boards/ESP32_P4_CAM/          <- COPY'd from micropython/boards/ESP32_P4_CAM/
+        mpconfigboard.h
+        mpconfigboard.cmake
+        sdkconfig.board
+      modules_camera/               <- COPY'd from micropython/modules/
+        micropython.cmake
+        modcamera.c
+      modules_frozen/               <- COPY'd from micropython/src/ + overridden by bind mount
+        manifest.py
+        boot.py
+        main.py
+        secret.py
+      build-ESP32_P4_CAM/
+        firmware.bin                <- compiled during docker build (baked in)
+  /opt/esp32-camera/                <- cloned esp32-camera IDF component
+  /opt/idf/                         <- Espressif IDF v5.4 (from base image)
+
+  Bind-mounted at docker run (overlays COPY'd versions with live host files):
+  /opt/micropython/ports/esp32/boards/ESP32_P4_CAM/  <- micropython/boards/ESP32_P4_CAM/
+  /opt/micropython/ports/esp32/modules_camera/        <- micropython/modules/
+  /opt/micropython/ports/esp32/modules_frozen/        <- micropython/src/
+  /firmware-out/                                      <- firmware-out/ on host
+
+--- esp32p4-emulator ---
+
+  Built from Dockerfile.qemu (three-stage). Runtime image:
+
+  /usr/local/bin/
+    qemu-system-riscv32    <- compiled from Espressif QEMU fork (Stage 1)
+    mklittlefs             <- compiled from mklittlefs repo (Stage 2)
+    run-qemu               <- COPY'd from scripts/run-qemu.sh (ENTRYPOINT)
+    inject-scripts         <- COPY'd from scripts/inject-scripts.py
+
+  /usr/local/share/qemu/   <- QEMU ROM blobs (COPY'd from Stage 1)
+
+  /usr/bin/socat           <- from apt
+  /usr/bin/python3         <- from apt
+  /usr/local/bin/mpremote  <- from pip
+  /usr/local/bin/esptool   <- from pip
+
+  Bind-mounted at docker run:
+  /firmware/               <- firmware-out/ on host  (contains firmware.bin)
+  /scripts/                <- micropython/src/ on host  (boot.py, main.py)
+  /secret.json             <- secret.json on host  (single file, read-only)
+
+  Generated inside the container at startup by run-qemu.sh:
+  /tmp/flash.bin           <- 8 MiB flash image (firmware.bin padded to full size)
+  /tmp/littlefs.bin        <- packed littlefs filesystem image
+  /tmp/scripts/
+    boot.py                <- copied from /scripts/
+    main.py                <- copied from /scripts/
+    secret.json            <- generated (merges /secret.json + emulator overrides)
+
+
+================================================================================
 CAMERA MODES
 ================================================================================
 
