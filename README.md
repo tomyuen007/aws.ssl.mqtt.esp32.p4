@@ -883,6 +883,86 @@ mpremote connect /dev/ttyUSB0 cp secret.json :secret.json
 
 ---
 
+## main.py
+
+### Role
+
+`main.py` is the **application loop** — it runs after `boot.py` has connected to WiFi and does three things forever:
+
+1. Polls MQTT for incoming commands (`client.check_msg()`)
+2. Every 10 seconds: captures a frame, publishes it as `devices/<thing>/image`, publishes telemetry to `devices/<thing>/telemetry`
+3. Responds to `devices/<thing>/cmd` messages by reconfiguring the camera
+
+It is **frozen into the firmware** via `manifest.py` alongside `boot.py` and `secret.py`.
+
+### Startup sequence (runs once before the main loop)
+
+```
+main.py starts
+│
+├── Read config from Secret (thing_name, emulator flag, broker, camera URL)
+│
+├── Transport branch
+│     EMULATOR=true  → plain TCP, port 1883, no SSL context
+│     EMULATOR=false → TLS SSLContext
+│           mqtt_ssl_verify=false  → skip CA verification (LocalStack)
+│           mqtt_ssl_verify=true   → load ca_cert (real AWS)
+│           device_cert + device_key present → mutual TLS
+│
+├── Camera branch
+│     EMULATOR=false → camera.init() for hardware MIPI CSI-2
+│     EMULATOR=true  → skip hardware init (no camera in QEMU)
+│
+├── MQTT connect + subscribe to devices/<thing>/cmd
+│
+└── Publish retained status: {"state":"online","chip":"esp32p4",...}
+```
+
+### Main loop (every 100 ms tick, frame every 10 s)
+
+```
+while True:
+    client.check_msg()          ← handle any incoming cmd message
+
+    if 10 s have elapsed:
+        frame = capture_frame() ← hardware camera, proxy, or stub JPEG
+        publish T_IMAGE  (frame bytes, QoS 0)
+        publish T_TELEMETRY ({"thing","chip","emulator","seq","img_b"}, QoS 1)
+
+    sleep 100 ms
+```
+
+### Frame capture priority
+
+`capture_frame()` tries three sources in order:
+
+| Priority | Source | Condition |
+|---|---|---|
+| 1 | Hardware camera (`camera.capture()`) | Real hardware, `camera.init()` succeeded |
+| 2 | HTTP proxy (`_fetch_proxy_frame()`) | `camera_proxy_url` set in `secret.json` — used by emulator |
+| 3 | Stub JPEG (1×1 grey pixel) | Last resort if proxy is also unreachable |
+
+The proxy fetch is a raw socket HTTP/1.0 GET — no `urequests` dependency.
+
+### MQTT topics
+
+| Topic | Direction | QoS | Payload |
+|---|---|---|---|
+| `devices/<thing>/status` | publish (retained) | 1 | `{"state","chip","emulator","transport","camera"}` — sent once on connect |
+| `devices/<thing>/telemetry` | publish | 1 | `{"thing","chip","emulator","seq","img_b"}` — every 10 s |
+| `devices/<thing>/image` | publish | 0 | Raw JPEG bytes — every 10 s |
+| `devices/<thing>/cmd` | subscribe | — | `{"framesize":"VGA"\|"HD",...,"quality":10}` — reconfigures camera |
+
+### Transport behaviour by environment
+
+| `emulator` | Port | SSL | Notes |
+|---|---|---|---|
+| `true` | 1883 | None — plain TCP | `run-qemu.sh` forces this; camera comes from proxy |
+| `false` + `mqtt_ssl_verify=false` | 8883 | TLS, no cert check | LocalStack with self-signed cert |
+| `false` + `mqtt_ssl_verify=true` | 8883 | Mutual TLS, CA verified | Real AWS IoT Core |
+
+---
+
 ## Flash to physical ESP32-P4 hardware
 
 ```bash
