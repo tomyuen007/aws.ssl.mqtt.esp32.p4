@@ -187,13 +187,18 @@ Not yet done
   [ ] Physical ESP32-P4 hardware -- camera, WiFi, SSL to LocalStack / AWS IoT
 
 Resume checklist
-  -- Prerequisites (one-time) --
-  P1. Install AWS CLI in WSL + aws configure with test/test credentials
-  P2. Install LocalStack on Windows -> copy to C:\bin -> WSL PATH + wrapper
-      script -> localstack --version
-  P3. echo 'export LOCALSTACK_AUTH_TOKEN=your-token' >> ~/.bashrc
 
-  -- First-time setup --
+  -- Prerequisites (one-time, WSL2) ----------------------------------------
+  P1. Install AWS CLI in WSL + aws configure
+        key=test, secret=test, region=us-east-1
+  P2. Install LocalStack on Windows -> copy to C:\bin -> WSL PATH + wrapper
+        -> localstack --version
+  P3. echo 'export LOCALSTACK_AUTH_TOKEN=your-token' >> ~/.bashrc && source ~/.bashrc
+
+  -- Prerequisites (one-time, Windows CMD) -----------------------------------
+  P4. cd windows.camera.server && pip install -r requirements.txt
+
+  -- First-time setup --------------------------------------------------------
   1.  cp secret.json.example secret.json       # fill in wifi_ssid, wifi_password
   2.  docker build -t esp32p4-camera-proxy:latest -f Dockerfile.camera-proxy .
   3.  docker build -t esp32p4-micropython:latest --target builder \
@@ -201,16 +206,36 @@ Resume checklist
   4.  docker build -t esp32p4-emulator:latest -f Dockerfile.qemu .
   5.  docker network create iot-net
   6.  docker volume create localstack_data
-  7.  docker run -d --name localstack ...      # Step 4 in readme
-  8.  docker run -d --name camera-proxy ...    # Step 5
-  9.  docker run -d --name micropython-builder ... # Step 6
-  10. docker exec micropython-builder bash -c "cp .../firmware.bin /firmware-out/"
+  7.  docker run -d --name localstack ...           # see Step 4 in readme
+  8.  docker run -d --name camera-proxy ...         # see Step 5
+  9.  docker run -d --name micropython-builder ...  # see Step 6
+  10. docker exec micropython-builder bash -c \
+        "cp .../firmware.bin /firmware-out/"        # see Step 7
   11. AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
-        THING_NAME=esp32p4-device-01 bash scripts/setup-localstack.sh
+        THING_NAME=esp32p4-device-01 \
+        bash scripts/setup-localstack.sh            # see Step 8
   12. python windows.camera.server\server.py --port 8081   # Windows CMD
-  13. docker run -d --name esp32p4-emulator ...  # Step 10 in readme
+  13. docker run -d --name esp32p4-emulator ...     # see Step 10
   14. mpremote connect socket://localhost:2323
   15. mosquitto_sub -h localhost -p 1883 -t "devices/#" -v
+
+  -- Daily workflow (after first-time setup) ---------------------------------
+  A.  python windows.camera.server\server.py --port 8081   # Windows CMD
+      or from WSL2: cmd.exe /c start "Camera" python.exe "$(wslpath -w ...)"
+  B.  docker start localstack camera-proxy micropython-builder
+  C.  until docker exec localstack curl -sf .../health | grep -q '"iot"'; do
+        sleep 2; done
+  D.  docker start esp32p4-emulator
+  E.  mpremote connect socket://localhost:2323
+  F.  docker stop esp32p4-emulator micropython-builder camera-proxy localstack
+
+  -- Real AWS IoT Core (when ready for physical hardware) --------------------
+  R1. aws iot describe-endpoint --endpoint-type iot:Data-ATS
+  R2. curl -o certs/ca.pem https://www.amazontrust.com/repository/AmazonRootCA1.pem
+  R3. Create iot-policy.json + aws iot create-policy   # see Real AWS IoT Core
+  R4. aws iot create-thing + create-keys-and-certificate + attach
+  R5. Update secret.json: mqtt_broker, mqtt_ssl_verify=true, ca_cert, certs
+  R6. mpremote cp certs + secret.json to device + reset
 
 
 ================================================================================
