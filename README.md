@@ -1004,6 +1004,65 @@ Hot reload:                    inject-scripts uploads over serial  ←───�
 
 ---
 
+## setup-localstack.sh
+
+### Role
+
+`setup-localstack.sh` provisions all required AWS IoT resources on a **running LocalStack container** and saves the device credentials to `certs/`. Run it once after the containers start — it is idempotent (safe to run again if resources already exist).
+
+It is the equivalent of the real-AWS per-device steps but targeting `http://localhost:4566` instead of AWS.
+
+### What it does (6 steps)
+
+```
+Step 1 — Create IoT Thing          aws iot create-thing --thing-name esp32p4-device-01
+Step 2 — Create IoT Policy         allows iot:Connect / Publish / Subscribe / Receive on *
+Step 3 — Create certificate + key  aws iot create-keys-and-certificate --set-as-active
+                                   saves device.pem.crt and device.key to certs/
+Step 4 — Attach policy → cert      aws iot attach-policy
+Step 5 — Attach cert → Thing       aws iot attach-thing-principal
+Step 6 — Extract LocalStack CA     openssl s_client → certs/ca.pem
+                                   (optional — only needed if mqtt_ssl_verify=true)
+```
+
+### Output files
+
+All saved to `certs/` (git-ignored):
+
+| File | Description |
+|---|---|
+| `certs/device.pem.crt` | Device certificate — upload to device flash |
+| `certs/device.key` | Device private key (`chmod 600`) — upload to device flash |
+| `certs/ca.pem` | LocalStack CA cert — only needed if `mqtt_ssl_verify=true` |
+
+### How to run it
+
+```bash
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
+  THING_NAME=esp32p4-device-01 \
+  bash scripts/setup-localstack.sh
+```
+
+The dummy `test` credentials are required — LocalStack accepts any value but the AWS CLI rejects missing credentials. The `--endpoint-url=http://localhost:4566` flag is baked into the script.
+
+### Idempotency
+
+Every AWS CLI call is followed by `2>/dev/null || echo "(already exists)"`. Running the script twice creates a second certificate and attaches it alongside the first — both are valid. To start clean, delete all resources in LocalStack first (`docker rm -f localstack && docker volume rm localstack_data`).
+
+### Relationship to real AWS setup
+
+`setup-localstack.sh` targets LocalStack with `mqtt_ssl_verify=false` (self-signed cert). For real AWS, follow the [Real AWS IoT Core setup](#real-aws-iot-core-setup) section instead, which uses `aws iot create-thing` against real AWS and `mqtt_ssl_verify=true` with `AmazonRootCA1.pem`.
+
+| | LocalStack | Real AWS |
+|---|---|---|
+| Endpoint | `http://localhost:4566` | `https://iot.<region>.amazonaws.com` |
+| Credentials | `test` / `test` | Real IAM credentials |
+| `mqtt_ssl_verify` | `false` | `true` |
+| CA cert | `certs/ca.pem` (self-signed, extracted from LocalStack) | `AmazonRootCA1.pem` (downloaded from Amazon) |
+| Script | `setup-localstack.sh` | Manual steps — see Real AWS IoT Core setup |
+
+---
+
 ## secret.py
 
 ### Role
