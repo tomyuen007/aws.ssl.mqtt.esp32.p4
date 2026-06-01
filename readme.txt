@@ -916,6 +916,68 @@ RUN-QEMU.SH
 
 
 ================================================================================
+INJECT-SCRIPTS.PY
+================================================================================
+
+  Role
+  ----
+  inject-scripts.py is the hot-reload tool for the emulator. It uploads .py
+  files into the running QEMU virtual device over the serial TCP port without
+  restarting QEMU or rebuilding firmware. Installed as the inject-scripts
+  command inside the esp32p4-emulator Docker image.
+
+  Used in two ways:
+    Rebuild (Python only):
+      docker exec esp32p4-emulator \
+        inject-scripts --host localhost --port 2323 --dir /scripts
+    Makefile shortcut:
+      make upload-scripts  (same docker exec command)
+
+  What it does
+  -------------
+  inject-scripts --host localhost --port 2323 --dir /scripts
+  |
+  +-- 1. Wait for MicroPython REPL
+  |        Opens TCP to localhost:2323
+  |        Scans bytes for ">>>" prompt
+  |        Retries every 1 s, times out after 60 s
+  |
+  +-- 2. Upload each .py file via mpremote
+  |        For each *.py in /scripts (sorted):
+  |          mpremote connect socket://localhost:2323 cp <file> :<name>
+  |        Skips secret.py (frozen in firmware -- uploading would have
+  |        no effect as frozen modules take priority over the filesystem)
+  |        Logs each upload; prints WARNING on non-zero exit
+  |
+  +-- 3. Reset the device
+           mpremote connect socket://localhost:2323 reset
+           MicroPython reboots, runs the newly uploaded files
+
+  Why it skips secret.py
+  -----------------------
+  secret.py is frozen into firmware by manifest.py. MicroPython resolves
+  frozen modules before the filesystem, so uploading a secret.py to flash
+  has no effect -- the frozen copy always wins.
+
+  Relationship to run-qemu.sh
+  ----------------------------
+  run-qemu.sh bakes scripts into the littlefs image before QEMU starts.
+  inject-scripts.py is used after QEMU is already running:
+
+    First boot:  run-qemu.sh -> mklittlefs bakes scripts -> QEMU starts
+                                                                  |
+    Hot reload:  inject-scripts uploads over serial  <-----------+
+                 and resets -- QEMU keeps running
+
+  Command-line options
+  ---------------------
+  --host     localhost   Hostname of the serial TCP port
+  --port     2323        TCP port (SERIAL_PORT in run-qemu.sh)
+  --dir      /scripts    Directory of .py files to upload
+  --timeout  60          Seconds to wait for REPL before giving up
+
+
+================================================================================
 SECRET.PY
 ================================================================================
 
