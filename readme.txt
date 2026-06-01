@@ -2218,6 +2218,7 @@ FILE STRUCTURE
     setup-localstack.sh           Provisions IoT thing / policy / cert on LocalStack
     provision-fleet.sh            Batch-provisions N devices in parallel (real AWS)
     generate-erp-pdf.py           Generates docs/erp-integration.pdf workflow diagrams
+    generate-system-diagram.py    Generates docs/system.entity.diagram.pdf
     requirements.txt              mpremote
 
   camera.proxy/
@@ -2245,6 +2246,7 @@ FILE STRUCTURE
 
   docs/
     erp-integration.pdf           Fleet workflow diagrams (generate-erp-pdf.py)
+    system.entity.diagram.pdf     System entity interaction diagram (generate-system-diagram.py)
 
   firmware-out/                   firmware.bin lands here after build (git-ignored)
   certs/                          Device certs from LocalStack / AWS (git-ignored)
