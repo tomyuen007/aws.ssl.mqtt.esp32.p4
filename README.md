@@ -2115,6 +2115,78 @@ python3 camera.proxy/list_cameras.py
 
 ---
 
+## Dockerfile.camera-proxy
+
+### Role
+
+`Dockerfile.camera-proxy` builds the `esp32p4-camera-proxy:latest` image — the Docker image that runs the `camera-proxy` container. It packages the entire `camera.proxy/` Python package (server, backends, list_cameras) into a lightweight Python 3.12 container with OpenCV and V4L2 support.
+
+### Build command
+
+```bash
+docker build -t esp32p4-camera-proxy:latest -f Dockerfile.camera-proxy .
+```
+
+Build context is the repo root (`.`) so the `COPY` instructions can reach both `camera.proxy/` and any other project files if needed.
+
+### What the build does (layer by layer)
+
+```
+FROM python:3.12-slim
+      │
+      ├── apt-get install libgl1 libglib2.0-0 libv4l-dev v4l-utils
+      │     OpenCV runtime shared libraries + V4L2 device support
+      │     libgl1 / libglib2.0-0 → required by opencv-python-headless at runtime
+      │     libv4l-dev / v4l-utils → V4L2 kernel interface for /dev/video0
+      │
+      ├── COPY camera.proxy/requirements.txt → pip install
+      │     opencv-python-headless   (no GUI — headless is smaller than full opencv)
+      │     numpy
+      │     Separate COPY before the full source copy so Docker can cache
+      │     the pip layer and only re-run pip when requirements.txt changes
+      │
+      ├── COPY camera.proxy/ /app/
+      │     server.py, list_cameras.py, backends/__init__.py, backends/*.py
+      │
+      ├── ENV  CAMERA_SOURCE=auto  CAMERA_URL=...  CAMERA_DEVICE=0  ...
+      │     Default env vars — all overridable at docker run time with -e
+      │
+      └── CMD ["python3", "/app/server.py"]
+            Container entrypoint — runs server.py in the foreground
+```
+
+### Why `opencv-python-headless` not `opencv-python`
+
+`opencv-python` includes GUI window support (GTK / Qt) which pulls in a large set of display libraries. The container has no display and never opens a window, so `opencv-python-headless` gives the same V4L2 and image encoding functionality at a smaller image size.
+
+### Why the requirements.txt COPY is separate from the source COPY
+
+```dockerfile
+COPY camera.proxy/requirements.txt /app/requirements.txt   ← layer A
+RUN pip install -r /app/requirements.txt                   ← layer B (cached)
+COPY camera.proxy/ /app/                                   ← layer C
+```
+
+Docker caches each layer. Layer B (pip install) only re-runs if layer A changes — i.e. if `requirements.txt` changes. Editing `server.py` or a backend only invalidates layer C, not the slow pip install layer. This makes iterative rebuilds fast.
+
+### Image contents at runtime
+
+```
+/app/
+  server.py
+  list_cameras.py
+  requirements.txt
+  backends/
+    __init__.py
+    v4l2.py
+    network.py
+    pattern.py
+```
+
+`/usr/local/bin/python3` runs `server.py` as the foreground process. No shell, no process manager — a single Python process with one HTTP thread and one capture daemon thread.
+
+---
+
 ## Camera modes
 
 ### How `windows.camera.server/server.py` fits into the project

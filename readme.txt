@@ -1999,6 +1999,79 @@ CAMERA.PROXY
 
 
 ================================================================================
+DOCKERFILE.CAMERA-PROXY
+================================================================================
+
+  Role
+  ----
+  Dockerfile.camera-proxy builds the esp32p4-camera-proxy:latest image --
+  the Docker image that runs the camera-proxy container. It packages the
+  entire camera.proxy/ Python package into a lightweight Python 3.12
+  container with OpenCV and V4L2 support.
+
+  Build command
+  --------------
+    docker build -t esp32p4-camera-proxy:latest -f Dockerfile.camera-proxy .
+
+  Build context is the repo root so COPY instructions can reach camera.proxy/.
+
+  What the build does (layer by layer)
+  --------------------------------------
+  FROM python:3.12-slim
+        |
+        +-- apt-get install libgl1 libglib2.0-0 libv4l-dev v4l-utils
+        |     libgl1 / libglib2.0-0  -> opencv-python-headless runtime deps
+        |     libv4l-dev / v4l-utils -> V4L2 kernel interface for /dev/video0
+        |
+        +-- COPY camera.proxy/requirements.txt -> pip install
+        |     opencv-python-headless  (no GUI -- smaller than full opencv)
+        |     numpy
+        |     Separate COPY so Docker caches the pip layer; only re-runs
+        |     pip when requirements.txt changes, not on every source edit
+        |
+        +-- COPY camera.proxy/ /app/
+        |     server.py, list_cameras.py, backends/__init__.py, backends/*.py
+        |
+        +-- ENV  CAMERA_SOURCE=auto  CAMERA_URL=...  CAMERA_DEVICE=0  ...
+        |     Default env vars -- all overridable at docker run with -e
+        |
+        +-- CMD ["python3", "/app/server.py"]
+              Container entrypoint -- server.py runs in the foreground
+
+  Why opencv-python-headless not opencv-python
+  ---------------------------------------------
+  opencv-python includes GUI window support (GTK/Qt) which pulls in large
+  display libraries. The container has no display and never opens a window.
+  opencv-python-headless provides the same V4L2 and image encoding at a
+  smaller image size.
+
+  Why requirements.txt is copied separately before the source
+  ------------------------------------------------------------
+    COPY camera.proxy/requirements.txt /app/requirements.txt  <- layer A
+    RUN  pip install -r /app/requirements.txt                 <- layer B (cached)
+    COPY camera.proxy/ /app/                                  <- layer C
+
+  Layer B (pip install) only re-runs if layer A changes -- i.e. if
+  requirements.txt changes. Editing server.py or a backend only invalidates
+  layer C, not the slow pip layer. Iterative rebuilds stay fast.
+
+  Image contents at runtime
+  --------------------------
+  /app/
+    server.py
+    list_cameras.py
+    requirements.txt
+    backends/
+      __init__.py
+      v4l2.py
+      network.py
+      pattern.py
+
+  A single Python process: one HTTP thread + one capture daemon thread.
+  No shell, no process manager.
+
+
+================================================================================
 CAMERA MODES
 ================================================================================
 
