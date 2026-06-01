@@ -1905,10 +1905,10 @@ CAMERA-PROXY.PY
 
   Role
   ----
-  camera-proxy.py runs inside the camera-proxy Docker container on WSL2. It is
+  camera.proxy/server.py runs inside the camera-proxy Docker container on WSL2. It is
   the single camera source for the emulated ESP32-P4. MicroPython main.py
   inside QEMU fetches http://camera-proxy:8080/frame.jpg every 10 seconds and
-  publishes the bytes as an MQTT image message. camera-proxy.py provides those
+  publishes the bytes as an MQTT image message. camera.proxy/server.py provides those
   bytes.
 
   It acts as a middle layer that abstracts the camera source -- MicroPython
@@ -1921,7 +1921,7 @@ CAMERA-PROXY.PY
           | windows.camera.server/server.py  (Windows, port 8081)
           | GET http://host.docker.internal:8081/frame.jpg
           v
-  camera-proxy container  <- camera-proxy.py runs here  (port 8080)
+  camera-proxy container  <- camera.proxy/server.py runs here  (port 8080)
           | GET http://camera-proxy:8080/frame.jpg
           v
   esp32p4-emulator  (MicroPython main.py, every 10 s)
@@ -2115,10 +2115,19 @@ FILE STRUCTURE
     run-qemu.sh                   Emulator entrypoint: flash image, socat, QEMU
     inject-scripts.py             Uploads .py files via mpremote after QEMU boots
     setup-localstack.sh           Provisions IoT thing / policy / cert on LocalStack
-    camera-proxy.py               HTTP camera server: v4l2 / network / pattern modes
     provision-fleet.sh            Batch-provisions N devices in parallel (real AWS)
     generate-erp-pdf.py           Generates docs/erp-integration.pdf workflow diagrams
     requirements.txt              mpremote
+
+  camera.proxy/
+    server.py                     HTTP camera server -- Docker container entrypoint
+    list_cameras.py               Probe available V4L2 devices before running server.py
+    requirements.txt              opencv-python-headless, numpy
+    backends/
+      __init__.py                 Backend selection (CAMERA_SOURCE -> start())
+      v4l2.py                     V4L2 capture loop (USB webcam via usbipd-win)
+      network.py                  Network fetch loop (polls windows.camera.server)
+      pattern.py                  Animated test pattern generator (NumPy)
 
   windows.camera.server/
     server.py                     Windows DirectShow camera HTTP server (run on Windows)

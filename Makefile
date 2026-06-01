@@ -46,7 +46,7 @@ WIN_CAMERA_PORT ?= 8081
 windows-camera:
 	@echo "Starting Windows camera server on port $(WIN_CAMERA_PORT)..."
 	cmd.exe /c start "Windows Camera Server" \
-	    python.exe "$(shell wslpath -w $(PWD)/scripts/windows-camera-server.py)" \
+	    python.exe "$(shell wslpath -w $(PWD)/windows.camera.server/server.py)" \
 	    --port $(WIN_CAMERA_PORT)
 
 build-emulator:
