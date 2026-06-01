@@ -8,31 +8,40 @@
 ## Current status — 2026-05-31
 
 ### Completed
+
+#### Firmware and MicroPython
 - [x] `Dockerfile.micropython` — ESP-IDF v5.4 + MicroPython v1.24.0 + `esp32-camera` component; compiles `firmware.bin` for `ESP32_P4_CAM` board at image build time
-- [x] `Dockerfile.qemu` — Espressif QEMU from source (`esp-develop` branch, `riscv32-softmmu`, `esp32p4` machine) + `mklittlefs`
-- [x] `Dockerfile.camera-proxy` — Python/OpenCV HTTP server; modes: `network` (Windows built-in camera via DirectShow), `v4l2` (USB via usbipd-win), `pattern` (test)
-- [x] `Secret` class (`secret.py`) — single access point for all config; reads `secret.json` from device filesystem; frozen into firmware
-- [x] `boot.py` — WiFi via `Secret.wifi_ssid()` / `Secret.wifi_password()`
-- [x] `main.py` — camera capture + MQTT publish every 10 s; SSL branch when `emulator=false`
+- [x] `Dockerfile.qemu` — Espressif QEMU from source (`esp-develop` branch, `riscv32-softmmu`, `esp32p4` machine) + `mklittlefs`; three-stage build
+- [x] `secret.py` — frozen into firmware; single access point for all config; reads `secret.json` from flash at runtime; lazy-cached
+- [x] `boot.py` — frozen into firmware; WiFi connect via `Secret`; raises `OSError` on failure before `main.py` runs
+- [x] `main.py` — frozen into firmware; camera capture + MQTT publish every 10 s; plain TCP in emulator, TLS on real hardware
 - [x] `modcamera.c` — MicroPython C module wrapping `esp_camera_*` for MIPI CSI-2
 - [x] SSL/TLS on real hardware (port 8883); plain TCP in emulator (port 1883)
-- [x] `setup-localstack.sh` — provisions IoT thing/policy; saves `device.pem.crt`, `device.key`, `ca.pem`
-- [x] QEMU SLiRP DNS — emulator resolves `localstack` and `camera-proxy` by Docker service name via `127.0.0.11`; socat relays kept as DNS-failure fallback
-- [x] `secret.json` git-ignored; `.env` committed (no secrets)
-- [x] All instructions use plain `docker` CLI — no `docker compose`
-- [x] GitHub repo: https://github.com/tomyuen007/aws.ssl.mqtt.esp32.p4
-- [x] Prerequisites documented with 3 numbered steps — AWS CLI, LocalStack (Windows + WSL), LocalStack auth token
-- [x] LocalStack installed on Windows (`C:\bin\localstack.exe`) and accessible from WSL bash via wrapper script at `/usr/local/bin/localstack`
-- [x] `C:\bin` added to WSL `$PATH` in `~/.bashrc`
-- [x] AWS CLI configured with dummy `test` credentials; `--endpoint-url http://localhost:4566` rule documented — no `awslocal` wrapper used
-- [x] Manual Docker CLI steps documented for MicroPython image with per-flag explanations and `docker-compose.yml` cross-references
-- [x] Real AWS IoT Core setup documented — CA cert download, IoT policy creation (step-by-step with account/region lookup, heredoc `\$aws` escaping explained), claim policy with locked-down Fleet Provisioning topics
-- [x] Fleet provisioning documented — Option A batch script (`provision-fleet.sh`, parallel, idempotent) and Option B AWS IoT Fleet Provisioning with claim cert flow
-- [x] `windows.camera.server/` — moved from `scripts/`; split into `server.py`, `list_cameras.py`, `requirements.txt`; `/health` endpoint enhanced with frame/error counts
-- [x] End-to-end fleet workflow documented — 4 phases: manufacturing → first boot → ERP registration → normal operation; DynamoDB lifecycle table; idempotency handling
-- [x] `docs/erp-integration.pdf` — 4-page PDF with flowcharts and swim lane diagram; regenerate with `scripts/generate-erp-pdf.py`
-- [x] Docker socket paths documented for WSL2, Windows, and macOS (including symlink note and three-slash rule)
-- [x] Daily workflow, rebuild firmware, and file structure sections expanded
+
+#### Emulator and scripts
+- [x] `run-qemu.sh` — container entrypoint; socat relays, flash image build, littlefs + `secret.json` generation, QEMU launch
+- [x] `inject-scripts.py` — hot-reload tool; waits for REPL, uploads `.py` files via `mpremote`, resets device; installed as `inject-scripts` in emulator image
+- [x] QEMU SLiRP DNS — emulator resolves `localstack` and `camera-proxy` by Docker service name; socat relays as DNS-failure fallback
+- [x] `setup-localstack.sh` — provisions IoT Thing/policy/cert on LocalStack; idempotent; saves `device.pem.crt`, `device.key`, `ca.pem`
+- [x] `wait.for.localstack.sh` — blocks until LocalStack IoT healthy (120 s timeout + error hint)
+- [x] `one.liner.wait-for-localstack.sh` — same as above as a single paste-friendly line
+
+#### Camera stack
+- [x] `camera.proxy/` — refactored from single file into package with split backends (`v4l2.py`, `network.py`, `pattern.py`); `list_cameras.py` utility; `Dockerfile.camera-proxy` updated
+- [x] `windows.camera.server/` — moved from `scripts/`; split into `server.py`, `list_cameras.py`, `requirements.txt`; `/health` endpoint includes frame/error counts
+
+#### Documentation and tooling
+- [x] `docs/erp-integration.pdf` — 4-page PDF with flowcharts and swim lane diagram; regenerate with `generate-erp-pdf.py`
+- [x] `docs/system.entity.diagram.pdf` — single-page landscape system entity interaction diagram; regenerate with `generate-system-diagram.py`
+- [x] Full CLI startup guide — prerequisites through verification (Steps P1–P4, 1–13)
+- [x] `docker-compose.yml` limitations documented — what it covers, what it misses, when to use it
+- [x] Detailed sections for every key file: `boot.py`, `main.py`, `secret.py`, `run-qemu.sh`, `inject-scripts.py`, `setup-localstack.sh`, `camera.proxy`, `windows.camera.server`, `Dockerfile.camera-proxy`, `Dockerfile.qemu`
+- [x] Container file inventory — baked-in vs bind-mounted files per container
+- [x] Real AWS IoT Core setup — CA cert, IoT policy (step-by-step with `\$aws` heredoc escaping), claim policy
+- [x] Fleet provisioning — Option A `provision-fleet.sh` (parallel, idempotent) + Option B AWS Fleet Provisioning with claim cert and Lambda pre-provisioning hook
+- [x] End-to-end fleet workflow — 4 phases: manufacturing → first boot → ERP registration → normal operation; DynamoDB lifecycle; idempotency
+- [x] Docker socket paths — WSL2, Windows, macOS (symlink note, three-slash rule)
+- [x] All `requirements.txt` audited — `scripts/requirements.txt` removed (redundant; `mpremote` in Dockerfile.qemu, `reportlab` self-documented in scripts)
 
 ### Not yet done
 - [ ] `LOCALSTACK_AUTH_TOKEN` added to `~/.bashrc` (Prerequisite 3)
