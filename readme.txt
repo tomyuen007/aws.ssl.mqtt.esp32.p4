@@ -255,6 +255,87 @@ Reasons:
 
 
 ================================================================================
+DOCKER-COMPOSE.YML -- LIMITATIONS AND WHEN TO USE IT
+================================================================================
+
+  What "docker compose up" covers
+  ---------------------------------
+  Starts all four containers in dependency order and handles image builds,
+  network/volume creation, port bindings, and env vars:
+
+    localstack          -> waits for healthcheck (IoT service healthy)
+    camera-proxy        -> starts after localstack
+    micropython-builder -> starts alongside camera-proxy
+    esp32p4-emulator    -> waits for localstack healthy + camera-proxy started
+
+  What it does NOT do
+  --------------------
+  Missing step            Why it matters              Manual fix
+  ----------------------  --------------------------  --------------------------
+  Firmware copy           firmware.bin must exist     docker exec micropython-
+                          before emulator starts      builder cp firmware.bin
+  LocalStack provisioning No IoT Thing/policy/cert    bash scripts/
+                          will exist                  setup-localstack.sh
+  secret.json not mounted Emulator uses default WiFi  -v secret.json:ro
+                          (HOST_SECRET not in         -e HOST_SECRET=
+                          Compose file)               at docker run time
+  Windows camera server   Runs on Windows -- Compose  python windows.camera.
+                          cannot start it             server\server.py :8081
+
+  Compose vs plain CLI -- side by side
+  --------------------------------------
+  docker compose up                  Plain docker CLI (this project)
+  ---------------------------------  ----------------------------------
+  Starts 4 containers automatically  Steps 4-6, 10 run manually
+  depends_on handles order           Manual health-check wait loop
+  Network + volume auto-created      docker network/volume create
+  Image built if missing             docker build (3 separate commands)
+  No firmware copy              ✗    Step 7: docker exec cp firmware.bin
+  No IoT provisioning           ✗    Step 8: setup-localstack.sh
+  No secret.json mount          ✗    Step 10: -v secret.json -e HOST_SECRET
+  No Windows camera server      ✗    Step 9: windows.camera.server/server.py
+
+  When to use "docker compose up"
+  --------------------------------
+  Use as a fast restart shortcut once the system has been set up at least once:
+
+    # Preconditions (already done):
+    #   - docker images built
+    #   - firmware-out/firmware.bin exists
+    #   - setup-localstack.sh has been run
+    #   - secret.json exists
+
+    # 1. Start Windows camera server (Windows CMD)
+    python windows.camera.server\server.py --port 8081
+
+    # 2. Start all containers
+    docker compose up -d
+
+    # 3. Run IoT provisioning (idempotent -- safe to re-run every time)
+    AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
+      THING_NAME=esp32p4-device-01 \
+      bash scripts/setup-localstack.sh
+
+  Note: Compose omits HOST_SECRET so the emulator falls back to default WiFi
+  credentials. Use plain docker run (Step 10 in CLI guide) when real WiFi
+  credentials are needed.
+
+  Use docker-compose.yml as a cross-reference
+  --------------------------------------------
+  Each plain docker run command maps to a service in docker-compose.yml.
+  Use it to understand what a flag does in context:
+
+    docker run flag                        Compose equivalent
+    -------------------------------------  ---------------------------
+    --name localstack                      container_name: localstack
+    --network iot-net                      networks: [iot-net]
+    -p 4566:4566                           ports: ["4566:4566"]
+    -e SERVICES=iot,sts,s3                 environment: [SERVICES=...]
+    -v localstack_data:/var/lib/...        volumes: [localstack_data:...]
+    --add-host host.docker.internal:...    extra_hosts: [...]
+
+
+================================================================================
 DECISION: manual Docker CLI steps documented inline
 ================================================================================
 

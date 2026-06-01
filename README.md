@@ -110,6 +110,83 @@ Reasons:
 
 ---
 
+## docker-compose.yml — limitations and when to use it
+
+### What `docker compose up` covers
+
+`docker compose up` starts all four containers in dependency order and handles image builds, network creation, volume creation, port bindings, and env vars:
+
+```
+localstack         → waits for healthcheck (IoT service healthy)
+camera-proxy       → starts after localstack
+micropython-builder→ starts alongside camera-proxy
+esp32p4-emulator   → waits for localstack healthy + camera-proxy started
+```
+
+### What it does NOT do
+
+| Missing step | Why it matters | Manual fix |
+|---|---|---|
+| **Firmware copy** | `firmware-out/firmware.bin` must exist before the emulator starts | `docker exec micropython-builder bash -c "cp .../firmware.bin /firmware-out/"` |
+| **LocalStack provisioning** | No IoT Thing, policy, or certificate will exist | `AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test THING_NAME=esp32p4-device-01 bash scripts/setup-localstack.sh` |
+| **`secret.json` not mounted** | Compose does not pass `HOST_SECRET` — emulator falls back to default WiFi credentials | Add `-v "$(pwd)/secret.json:/secret.json:ro" -e HOST_SECRET=/secret.json` at `docker run` time, or use plain CLI |
+| **Windows camera server** | `windows.camera.server/server.py` runs on Windows — Compose cannot start it | `python windows.camera.server\server.py --port 8081` (Windows CMD) |
+
+### Compose vs plain CLI — side by side
+
+```
+docker compose up                   Plain docker CLI (this project)
+─────────────────────────────────   ────────────────────────────────────────
+Starts 4 containers automatically   Steps 4–6, 10 run containers manually
+depends_on handles order            Manual health-check wait loop (Step 4)
+network + volume auto-created       docker network create / volume create
+image built if missing              docker build (3 separate commands)
+❌ no firmware copy                  Step 7: docker exec cp firmware.bin
+❌ no IoT provisioning               Step 8: setup-localstack.sh
+❌ no secret.json mount              Step 10: -v secret.json -e HOST_SECRET
+❌ no Windows camera server          Step 9: windows.camera.server/server.py
+```
+
+### When to use `docker compose up`
+
+Use it as a **fast restart shortcut** once the system has been set up at least once:
+
+```bash
+# Preconditions (already done):
+#   - docker images built
+#   - firmware-out/firmware.bin exists
+#   - setup-localstack.sh has been run
+#   - secret.json exists
+
+# 1. Start Windows camera server (Windows CMD)
+python windows.camera.server\server.py --port 8081
+
+# 2. Start all containers
+docker compose up -d
+
+# 3. Run IoT provisioning (idempotent — safe to re-run every time)
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
+  THING_NAME=esp32p4-device-01 \
+  bash scripts/setup-localstack.sh
+```
+
+> `docker-compose.yml` does not mount `secret.json` — the emulator uses hardcoded defaults for WiFi. For the emulator this is acceptable because `run-qemu.sh` reads WiFi creds from `HOST_SECRET` at container start time, and the Compose file omits that variable. Use plain `docker run` (Step 10 in the CLI guide) when you need real WiFi credentials in the emulator.
+
+### Use `docker-compose.yml` as a cross-reference
+
+Each plain `docker run` command in this project maps to a service in `docker-compose.yml`. Use it to understand what a flag does in context:
+
+| `docker run` flag | Compose equivalent |
+|---|---|
+| `--name localstack` | `container_name: localstack` |
+| `--network iot-net` | `networks: [iot-net]` |
+| `-p 4566:4566` | `ports: ["4566:4566"]` |
+| `-e SERVICES=iot,sts,s3` | `environment: [SERVICES=iot,sts,s3]` |
+| `-v localstack_data:/var/lib/localstack` | `volumes: [localstack_data:/var/lib/localstack]` |
+| `--add-host host.docker.internal:host-gateway` | `extra_hosts: [host.docker.internal:host-gateway]` |
+
+---
+
 ## Decision: manual Docker CLI steps documented inline
 
 Each Docker command in this project is written out with every flag explained so any developer can understand what it does without prior Docker knowledge. The `docker-compose.yml` encodes the same configuration in declarative form — use it as a cross-reference to see how a plain `docker` command maps to a Compose service definition.
