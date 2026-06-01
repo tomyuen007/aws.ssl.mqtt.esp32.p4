@@ -810,6 +810,79 @@ mpremote connect socket://localhost:2323
 
 ---
 
+## secret.py
+
+### Role
+
+`secret.py` is the **single access point for all runtime configuration** on the device. Both `boot.py` (WiFi) and `main.py` (MQTT, SSL, camera URL) call `Secret.*()` methods exclusively — neither file hard-codes credentials or addresses. This means the same firmware binary works in every environment; only `secret.json` changes.
+
+`secret.py` is **frozen into the firmware** at build time via `manifest.py`, so it is always present even before any files are uploaded to the device filesystem.
+
+### How it works
+
+On first access, `Secret._load()` opens `secret.json` from the device filesystem and caches the parsed JSON in `Secret._cache`. All subsequent calls read from the cache — the file is only opened once per boot. If `secret.json` is missing or malformed, `_cache` is set to `{}` and every key returns its hard-coded default.
+
+```
+Boot
+ │
+ ├── boot.py calls Secret.wifi_ssid() / Secret.wifi_password()
+ │      │  Secret._load() opens secret.json on first call
+ │      │  Returns cached value on subsequent calls
+ │      └── connects to WiFi
+ │
+ └── main.py calls Secret.is_emulator(), Secret.thing_name(), etc.
+        └── uses cached values — no second file read
+```
+
+### What secret.json contains
+
+```json
+{
+  "wifi_ssid":          "your-wifi",
+  "wifi_password":      "your-password",
+  "mqtt_broker":        "192.168.1.100",
+  "mqtt_broker_emulator": "10.0.2.2",
+  "mqtt_port":          1883,
+  "mqtt_ssl_port":      8883,
+  "thing_name":         "esp32p4-device-01",
+  "mqtt_ssl_verify":    false,
+  "ca_cert":            null,
+  "device_cert":        "device.pem.crt",
+  "device_key":         "device.key",
+  "camera_proxy_url":   "http://camera-proxy:8080/frame.jpg",
+  "emulator":           false
+}
+```
+
+### All Secret methods and what uses them
+
+| Method | Used by | Purpose |
+|---|---|---|
+| `wifi_ssid()` | `boot.py` | WiFi network name |
+| `wifi_password()` | `boot.py` | WiFi password |
+| `mqtt_broker()` | `main.py` | Broker address for real hardware (LAN IP or AWS endpoint) |
+| `mqtt_broker_emulator()` | `main.py` | Broker address inside QEMU (`10.0.2.2` → socat relay → LocalStack) |
+| `mqtt_port()` | `main.py` | Plain TCP port 1883 — emulator only |
+| `mqtt_ssl_port()` | `main.py` | TLS port 8883 — real hardware only |
+| `thing_name()` | `main.py` | AWS IoT Thing name for MQTT client ID and topic |
+| `mqtt_ssl_verify()` | `main.py` | `false` for LocalStack, `true` for real AWS |
+| `ca_cert()` | `main.py` | Path to CA cert PEM — `null` skips server verification |
+| `device_cert()` | `main.py` | Path to device cert PEM for mutual TLS |
+| `device_key()` | `main.py` | Path to device private key PEM for mutual TLS |
+| `camera_proxy_url()` | `main.py` | URL to fetch JPEG frames from |
+| `is_emulator()` | `main.py` | Switches between plain TCP and TLS; selects broker address |
+
+### How secret.json gets onto the device
+
+**Emulator:** `run-qemu.sh` generates `secret.json` automatically. It reads WiFi credentials from the host's `secret.json` (bind-mounted at `/secret.json`), merges emulator-specific overrides (`emulator=true`, `mqtt_broker=localstack`, `camera_proxy_url=http://camera-proxy:8080/frame.jpg`, `mqtt_port=1883`), and writes the merged file into the virtual flash filesystem via `mklittlefs`. The emulator never attempts SSL because `emulator=true` causes `main.py` to skip the TLS branch entirely.
+
+**Real hardware:** `secret.json` is uploaded directly to the device filesystem with `mpremote`:
+```bash
+mpremote connect /dev/ttyUSB0 cp secret.json :secret.json
+```
+
+---
+
 ## Flash to physical ESP32-P4 hardware
 
 ```bash

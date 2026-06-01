@@ -776,6 +776,71 @@ REBUILD FIRMWARE
 
 
 ================================================================================
+SECRET.PY
+================================================================================
+
+  Role
+  ----
+  secret.py is the single access point for all runtime configuration on the
+  device. Both boot.py (WiFi) and main.py (MQTT, SSL, camera URL) call
+  Secret.*() methods exclusively -- neither file hard-codes credentials or
+  addresses. The same firmware binary works in every environment; only
+  secret.json changes.
+
+  secret.py is frozen into the firmware at build time via manifest.py, so it
+  is always present even before any files are uploaded to the device filesystem.
+
+  How it works
+  -------------
+  On first access, Secret._load() opens secret.json from the device filesystem
+  and caches the parsed JSON in Secret._cache. All subsequent calls read from
+  the cache -- the file is opened only once per boot. If secret.json is missing
+  or malformed, _cache is set to {} and every key returns its hard-coded default.
+
+    Boot
+     |
+     +-- boot.py calls Secret.wifi_ssid() / Secret.wifi_password()
+     |      Secret._load() opens secret.json on first call
+     |      Returns cached value on subsequent calls
+     |      connects to WiFi
+     |
+     +-- main.py calls Secret.is_emulator(), Secret.thing_name(), etc.
+            uses cached values -- no second file read
+
+  All Secret methods and what uses them
+  ---------------------------------------
+  Method                  Used by   Purpose
+  ----------------------  --------  ------------------------------------------
+  wifi_ssid()             boot.py   WiFi network name
+  wifi_password()         boot.py   WiFi password
+  mqtt_broker()           main.py   Broker address for real hardware
+  mqtt_broker_emulator()  main.py   Broker address in QEMU (10.0.2.2 -> socat)
+  mqtt_port()             main.py   Plain TCP 1883 -- emulator only
+  mqtt_ssl_port()         main.py   TLS port 8883 -- real hardware only
+  thing_name()            main.py   AWS IoT Thing name
+  mqtt_ssl_verify()       main.py   false=LocalStack, true=real AWS
+  ca_cert()               main.py   Path to CA cert PEM (null skips verify)
+  device_cert()           main.py   Path to device cert PEM (mutual TLS)
+  device_key()            main.py   Path to device private key PEM
+  camera_proxy_url()      main.py   URL to fetch JPEG frames from
+  is_emulator()           main.py   Switches TCP/TLS and selects broker address
+
+  How secret.json gets onto the device
+  --------------------------------------
+  Emulator:
+    run-qemu.sh generates secret.json automatically. Reads WiFi creds from
+    the host secret.json (bind-mounted at /secret.json), merges emulator
+    overrides (emulator=true, mqtt_broker=localstack,
+    camera_proxy_url=http://camera-proxy:8080/frame.jpg, mqtt_port=1883),
+    and writes the merged file into the virtual flash via mklittlefs.
+    emulator=true causes main.py to skip the TLS branch entirely.
+
+  Real hardware:
+    Uploaded directly to the device filesystem with mpremote:
+      mpremote connect /dev/ttyUSB0 cp secret.json :secret.json
+
+
+================================================================================
 FLASH TO PHYSICAL ESP32-P4 HARDWARE
 ================================================================================
 
