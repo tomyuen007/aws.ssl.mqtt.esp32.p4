@@ -330,6 +330,320 @@ pip install opencv-python
 
 ---
 
+## Full CLI startup guide
+
+End-to-end instructions from a clean slate to a running system, CLI only.
+
+---
+
+### Prerequisites (one-time, WSL2)
+
+```bash
+# P1 — AWS CLI
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
+unzip awscliv2.zip && sudo ./aws/install
+aws configure
+# AWS Access Key ID:     test
+# AWS Secret Access Key: test
+# Default region name:   us-east-1
+# Default output format: json
+
+# P2 — LocalStack on Windows (run in Windows CMD)
+pip install localstack
+copy "%LOCALAPPDATA%\Programs\Python\Python3x\Scripts\localstack.exe" C:\bin\
+
+# P3 — LocalStack accessible from WSL2
+echo 'export PATH="/mnt/c/bin:$PATH"' >> ~/.bashrc
+sudo tee /usr/local/bin/localstack > /dev/null <<'EOF'
+#!/bin/bash
+/mnt/c/bin/localstack.exe "$@"
+EOF
+sudo chmod +x /usr/local/bin/localstack
+echo 'export LOCALSTACK_AUTH_TOKEN=your-token' >> ~/.bashrc
+source ~/.bashrc
+
+# P4 — Windows camera server dependencies (Windows CMD)
+cd windows.camera.server && pip install -r requirements.txt
+```
+
+---
+
+### Step 1 — Create secret.json
+
+```bash
+cp secret.json.example secret.json
+```
+
+Edit minimum required fields:
+```bash
+python3 -c "
+import json
+s = json.load(open('secret.json'))
+s['wifi_ssid']     = 'your-ssid'
+s['wifi_password'] = 'your-password'
+json.dump(s, open('secret.json','w'), indent=2)
+"
+```
+
+---
+
+### Step 2 — Create Docker network and volume
+
+```bash
+docker network create iot-net
+docker volume create localstack_data
+```
+
+---
+
+### Step 3 — Build all three Docker images
+
+```bash
+# camera-proxy (~2 min)
+docker build -t esp32p4-camera-proxy:latest -f Dockerfile.camera-proxy .
+
+# micropython firmware builder (~15–30 min, pulls espressif/idf:release-v5.4)
+docker build \
+  -t esp32p4-micropython:latest \
+  --target builder \
+  --build-arg MPY_TAG=v1.24.0 \
+  -f Dockerfile.micropython .
+
+# QEMU emulator (~15–20 min, compiles QEMU from source)
+docker build -t esp32p4-emulator:latest -f Dockerfile.qemu .
+```
+
+---
+
+### Step 4 — Start LocalStack
+
+```bash
+docker run -d \
+  --name localstack \
+  --network iot-net \
+  -p 4566:4566 \
+  -p 1883:1883 \
+  -p 8883:8883 \
+  -e SERVICES=iot,sts,s3 \
+  -e DEBUG=1 \
+  -e PERSIST_ALL=1 \
+  -e LOCALSTACK_AUTH_TOKEN= \
+  -v localstack_data:/var/lib/localstack \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  localstack/localstack:latest
+
+# Wait until IoT service is healthy (blocks until ready)
+until docker exec localstack \
+    curl -sf http://localhost:4566/_localstack/health | grep -q '"iot"'; do
+  sleep 2
+done
+echo "LocalStack ready."
+```
+
+---
+
+### Step 5 — Start camera-proxy
+
+```bash
+docker run -d \
+  --name camera-proxy \
+  --network iot-net \
+  -p 8080:8080 \
+  -e CAMERA_SOURCE=network \
+  -e CAMERA_URL=http://host.docker.internal:8081/frame.jpg \
+  -e CAMERA_DEVICE=0 \
+  -e CAMERA_WIDTH=640 \
+  -e CAMERA_HEIGHT=480 \
+  -e JPEG_QUALITY=85 \
+  -e PORT=8080 \
+  --add-host host.docker.internal:host-gateway \
+  esp32p4-camera-proxy:latest
+```
+
+> Use `-e CAMERA_SOURCE=pattern` to skip `windows.camera.server` entirely (test pattern only).
+
+---
+
+### Step 6 — Start micropython-builder
+
+```bash
+mkdir -p firmware-out
+
+docker run -d \
+  --name micropython-builder \
+  --network iot-net \
+  -v "$(pwd)/micropython/boards/ESP32_P4_CAM:/opt/micropython/ports/esp32/boards/ESP32_P4_CAM" \
+  -v "$(pwd)/micropython/modules:/opt/micropython/ports/esp32/modules_camera" \
+  -v "$(pwd)/micropython/src:/opt/micropython/ports/esp32/modules_frozen" \
+  -v "$(pwd)/firmware-out:/firmware-out" \
+  -e EXTRA_COMPONENT_DIRS=/opt/esp32-camera \
+  --entrypoint tail \
+  esp32p4-micropython:latest \
+  -f /dev/null
+```
+
+---
+
+### Step 7 — Copy firmware to host
+
+```bash
+docker exec micropython-builder \
+  bash -c "cp /opt/micropython/ports/esp32/build-ESP32_P4_CAM/firmware.bin /firmware-out/"
+
+ls -lh firmware-out/firmware.bin   # confirm file exists and size > 0
+```
+
+---
+
+### Step 8 — Provision IoT resources on LocalStack
+
+```bash
+AWS_ACCESS_KEY_ID=test \
+AWS_SECRET_ACCESS_KEY=test \
+THING_NAME=esp32p4-device-01 \
+bash scripts/setup-localstack.sh
+```
+
+Expected output:
+```
+==> Creating IoT thing: esp32p4-device-01
+==> Creating IoT policy: esp32p4-mqtt-policy
+==> Creating certificate + private key...
+    device.pem.crt  saved
+    device.key      saved
+    Certificate ARN: arn:aws:iot:us-east-1:...
+==> Attaching policy to certificate
+==> Attaching certificate to thing
+Done.
+```
+
+---
+
+### Step 9 — Start Windows camera server
+
+**From WSL2** (no need to switch terminals):
+```bash
+cmd.exe /c start "Windows Camera Server" \
+  python.exe "$(wslpath -w "$(pwd)/windows.camera.server/server.py")" \
+  --port 8081
+```
+
+**Or from Windows CMD directly:**
+```cmd
+python windows.camera.server\server.py --port 8081
+```
+
+Allow Windows Firewall access when prompted, then verify:
+```bash
+curl -s http://host.docker.internal:8081/health
+# {"ok":true,"source":"directshow","frames":5,"errors":0}
+```
+
+> Skip this step if `CAMERA_SOURCE=pattern` was used in Step 5.
+
+---
+
+### Step 10 — Start the emulator
+
+```bash
+docker run -d \
+  --name esp32p4-emulator \
+  --network iot-net \
+  -p 2323:2323 \
+  -p 1234:1234 \
+  -v "$(pwd)/firmware-out:/firmware:ro" \
+  -v "$(pwd)/micropython/src:/scripts:ro" \
+  -v "$(pwd)/secret.json:/secret.json:ro" \
+  -e FIRMWARE_BIN=/firmware/firmware.bin \
+  -e SCRIPTS_DIR=/scripts \
+  -e HOST_SECRET=/secret.json \
+  -e FLASH_SIZE_MB=8 \
+  -e FS_OFFSET=0x200000 \
+  -e FS_SIZE_MB=2 \
+  -e MQTT_BROKER=localstack \
+  -e MQTT_PORT=1883 \
+  -e THING_NAME=esp32p4-device-01 \
+  -e LOCALSTACK_HOST=localstack \
+  -e CAMERA_PROXY_HOST=camera-proxy \
+  -e CAMERA_PROXY_PORT=8080 \
+  -e SERIAL_PORT=2323 \
+  -e GDB_PORT=1234 \
+  esp32p4-emulator:latest
+
+# Follow startup logs — QEMU takes 10–20 s to boot MicroPython
+docker logs -f esp32p4-emulator
+# Expected: "MQTT -> localstack : 1883 (plain)"
+# Ctrl-C to stop following
+```
+
+---
+
+### Step 11 — Verify REPL
+
+```bash
+mpremote connect socket://localhost:2323
+# >>> prompt appears (press Enter if delayed)
+# >>> import sys; print(sys.version)
+# Ctrl-X to exit mpremote
+```
+
+Alternative (raw telnet):
+```bash
+telnet localhost 2323
+```
+
+---
+
+### Step 12 — Verify camera stream
+
+```bash
+curl -s http://localhost:8080/health
+# {"ok":true,"source":"network"}
+
+# Open MJPEG stream in browser
+explorer.exe "http://localhost:8080/stream"   # WSL2
+# or: xdg-open http://localhost:8080/stream
+```
+
+---
+
+### Step 13 — Verify MQTT messages
+
+```bash
+sudo apt install mosquitto-clients   # if not already installed
+
+mosquitto_sub -h localhost -p 1883 -t "devices/#" -v
+```
+
+Expected every 10 seconds:
+```
+devices/esp32p4-device-01/status     {"state":"online","chip":"esp32p4","emulator":true,...}
+devices/esp32p4-device-01/telemetry  {"thing":"esp32p4-device-01","seq":0,"img_b":12345}
+devices/esp32p4-device-01/image      <binary JPEG bytes>
+```
+
+---
+
+### Verify LocalStack IoT Thing
+
+```bash
+aws --endpoint-url=http://localhost:4566 \
+    --no-verify-ssl \
+    iot list-things
+# {"things": [{"thingName": "esp32p4-device-01", ...}]}
+```
+
+---
+
+### Stop everything
+
+```bash
+docker stop esp32p4-emulator micropython-builder camera-proxy localstack
+# Windows camera server: Ctrl-C in its CMD window, or close the window
+```
+
+---
+
 ## First-time setup
 
 ### Step 1 — Create secret.json
