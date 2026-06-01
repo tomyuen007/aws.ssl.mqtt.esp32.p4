@@ -776,6 +776,60 @@ REBUILD FIRMWARE
 
 
 ================================================================================
+BOOT.PY
+================================================================================
+
+  Role
+  ----
+  boot.py is MicroPython's first user script -- the runtime executes it
+  automatically before main.py every time the device boots or resets.
+  Its only job is to connect to WiFi. If WiFi fails it raises OSError and
+  main.py never starts.
+
+  Frozen into firmware via manifest.py alongside secret.py and main.py.
+
+  Boot order
+  -----------
+  Power on / reset
+        |
+        v
+  MicroPython runtime initialises hardware
+        |
+        v
+  boot.py runs  <- connects to WiFi, blocks up to 10 s
+        |
+        |  raises OSError if WiFi fails -> device halts here
+        v
+  main.py runs  <- MQTT, camera loop, etc.
+
+  What it does
+  -------------
+  connect_wifi()
+    |
+    +-- Read SSID + password from Secret (reads secret.json once)
+    +-- Activate station interface (WLAN STA_IF)
+    +-- Skip connect() if already connected (safe after soft reset)
+    +-- Call wlan.connect(ssid, password)
+    +-- Poll wlan.isconnected() every 500 ms, up to 20 retries (10 s)
+    +-- On success -> print IP address, return it
+    +-- On failure -> raise OSError("WiFi connect failed")
+
+  Why it is separate from main.py
+  ---------------------------------
+  MicroPython runs boot.py then main.py in sequence. Keeping WiFi setup
+  in boot.py means:
+    - main.py can assume the network is up -- no reconnect logic there
+    - WiFi failures surface at boot before any MQTT or camera code runs
+    - boot.py can be replaced independently without touching app logic
+
+  Credentials
+  ------------
+  SSID and password come from Secret.wifi_ssid() / Secret.wifi_password(),
+  which read secret.json. Never hard-coded in boot.py.
+  See SECRET.PY section for how secret.json gets onto the device.
+
+
+================================================================================
 SECRET.PY
 ================================================================================
 

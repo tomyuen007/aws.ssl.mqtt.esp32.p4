@@ -810,6 +810,57 @@ mpremote connect socket://localhost:2323
 
 ---
 
+## boot.py
+
+### Role
+
+`boot.py` is MicroPython's **first user script** — the runtime executes it automatically before `main.py` every time the device boots or resets. Its only job is to connect to WiFi. If WiFi fails, it raises `OSError` and `main.py` never starts.
+
+It is **frozen into the firmware** via `manifest.py` alongside `secret.py` and `main.py`.
+
+### Boot order
+
+```
+Power on / reset
+      │
+      ▼
+MicroPython runtime initialises hardware
+      │
+      ▼
+boot.py runs  ← connects to WiFi, blocks until connected (up to 10 s)
+      │
+      │  raises OSError if WiFi fails → device halts here
+      ▼
+main.py runs  ← MQTT, camera loop, etc.
+```
+
+### What it does
+
+```python
+connect_wifi()
+    │
+    ├── Read SSID + password from Secret (reads secret.json once)
+    ├── Activate station interface (WLAN STA_IF)
+    ├── Skip connect() if already connected (safe to call after soft reset)
+    ├── Call wlan.connect(ssid, password)
+    ├── Poll wlan.isconnected() every 500 ms, up to 20 retries (10 s total)
+    ├── On success → print IP address, return it
+    └── On failure → raise OSError("WiFi connect failed")
+```
+
+### Why it is separate from main.py
+
+MicroPython runs `boot.py` then `main.py` in sequence. Keeping WiFi setup in `boot.py` means:
+- `main.py` can assume the network is up — no reconnect logic needed there
+- WiFi failures surface immediately at boot before any MQTT or camera code runs
+- `boot.py` can be replaced independently without touching application logic
+
+### Credentials
+
+SSID and password come from `Secret.wifi_ssid()` and `Secret.wifi_password()`, which read `secret.json`. They are never hard-coded in `boot.py`. See [secret.py](#secretpy) for how `secret.json` gets onto the device.
+
+---
+
 ## secret.py
 
 ### Role
