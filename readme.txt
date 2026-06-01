@@ -526,6 +526,24 @@ FULL CLI STARTUP GUIDE
     done
     echo "LocalStack ready."
 
+  The wait loop -- CLI or script?
+  ---------------------------------
+  The until block is valid bash in both forms. Paste the whole block
+  directly into the terminal, or use the provided scripts:
+
+  Multi-line script (with 120 s timeout + error message):
+    bash scripts/wait.for.localstack.sh
+
+  One-liner -- easiest to paste into a terminal:
+    until docker exec localstack curl -sf http://localhost:4566/_localstack/health | grep -q '"iot"'; do sleep 2; done && echo "LocalStack ready."
+
+  Or run the one-liner script:
+    bash scripts/one.liner.wait-for-localstack.sh
+
+  All three are equivalent. The multi-line form is for readability only --
+  it is not a script requirement. When pasted as a block, bash's interactive
+  mode handles the until/do/done structure and executes it at once.
+
 
 --- Step 5 -- Start camera-proxy ---
 
@@ -2631,6 +2649,8 @@ FILE STRUCTURE
     provision-fleet.sh            Batch-provisions N devices in parallel (real AWS)
     generate-erp-pdf.py           Generates docs/erp-integration.pdf workflow diagrams
     generate-system-diagram.py    Generates docs/system.entity.diagram.pdf
+    wait.for.localstack.sh        Block until LocalStack IoT healthy (120 s timeout)
+    one.liner.wait-for-localstack.sh  Same as above as a single paste-friendly line
     requirements.txt              mpremote
 
   camera.proxy/
